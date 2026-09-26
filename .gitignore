@@ -1,0 +1,6 @@
+build*/
+*.app
+*.nro
+*.nacp
+*.elf
+*.rsrc

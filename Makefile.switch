@@ -1,0 +1,160 @@
+# Makefile.switch - Nintendo Switch homebrew build (devkitPro / libnx).
+#
+#   export DEVKITPRO=/opt/devkitpro
+#   make -f Makefile.switch          # or: make switch
+#
+# Produces blackshades.nro, with the game's Data folder inside it as romfs.
+# Copy the .nro to /switch/blackshades/ on the SD card and start it from
+# hbmenu.  Saves and config.txt are written to /switch/blackshades/ as well.
+#
+# Nothing here is shared with the desktop Makefile: the two builds have
+# separate object directories (build-switch vs build) and separate flags, so
+# building one never disturbs the other.
+#
+# Packages needed:  switch-dev switch-sdl2 switch-mesa switch-libdrm_nouveau
+#   sudo dkp-pacman -S switch-dev switch-sdl2 switch-mesa switch-libdrm_nouveau
+#
+# See README-switch.md for what is known to work and what is untested.
+
+ifeq ($(strip $(DEVKITPRO)),)
+$(error Set DEVKITPRO first, e.g. export DEVKITPRO=/opt/devkitpro)
+endif
+
+DEVKITA64 ?= $(DEVKITPRO)/devkitA64
+LIBNX     := $(DEVKITPRO)/libnx
+PORTLIBS  := $(DEVKITPRO)/portlibs/switch
+TOOLS     := $(DEVKITPRO)/tools/bin
+
+PREFIX := $(DEVKITA64)/bin/aarch64-none-elf-
+CC     := $(PREFIX)gcc
+CXX    := $(PREFIX)g++
+
+TARGET := blackshades
+OBJDIR := build-switch
+SRCDIR := Source
+
+# elf2nro puts the *contents* of --romfsdir at the root of romfs, and the game
+# looks for "Data/..." under its data root, so the folder handed to elf2nro is
+# one that contains Data rather than Data itself.
+ROMFSDIR := $(OBJDIR)/romfs
+
+APP_TITLE   := Black Shades
+APP_AUTHOR  := David Rosen, SDL port
+APP_VERSION := 1.0
+# A 256x256 JPEG, if you want one; elf2nro uses its own default otherwise.
+ICON := $(wildcard macos/switch-icon.jpg)
+
+# ---------------------------------------------------------------- flags
+
+ARCH := -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE -ftls-model=local-exec
+
+WARNINGS := -Wall -Wno-unused-variable -Wno-unused-but-set-variable \
+            -Wno-unused-value -Wno-sign-compare -Wno-write-strings \
+            -Wno-narrowing
+
+DEFINES  := -D__SWITCH__ -DSDL_MAIN_HANDLED
+
+# make -f Makefile.switch NXLINK=1 - the game's printf output goes to the
+# nxlink host instead of nowhere (see README-switch.md)
+ifdef NXLINK
+  DEFINES += -DNXLINK
+endif
+INCLUDES := -I$(SRCDIR) -I$(SRCDIR)/thirdparty/glad/include \
+            -I$(PORTLIBS)/include -I$(PORTLIBS)/include/SDL2 -I$(LIBNX)/include
+
+# SDL2's own flags if pkg-config knows about it, otherwise the usual set
+PKGCONFIG  := PKG_CONFIG_LIBDIR=$(PORTLIBS)/lib/pkgconfig pkg-config
+SDL_CFLAGS := $(shell $(PKGCONFIG) --cflags sdl2 2>/dev/null)
+SDL_LIBS   := $(shell $(PKGCONFIG) --libs sdl2 2>/dev/null)
+ifeq ($(strip $(SDL_LIBS)),)
+  SDL_LIBS := -lSDL2 -lEGL -lglapi -ldrm_nouveau -lnx
+endif
+
+BASEFLAGS := -O2 -g $(ARCH) $(DEFINES) $(INCLUDES) $(SDL_CFLAGS) -MMD -MP
+CXXFLAGS  := $(BASEFLAGS) $(WARNINGS) -include $(SRCDIR)/Support.h
+CFLAGS    := $(BASEFLAGS) -Wall -Wno-unused-value
+
+LDFLAGS := -specs=$(LIBNX)/switch.specs $(ARCH) -L$(PORTLIBS)/lib -L$(LIBNX)/lib
+LIBS    := $(SDL_LIBS) -lnx -lm
+
+# ---------------------------------------------------------------- sources
+#
+# The same list the desktop Makefile builds (AGL_DSp.cpp, Alerts.cpp and
+# Files.cpp are the Mac OS 9 originals and are not built anywhere), plus
+# glad, which stands in for the libGL the Switch has not got.
+
+CXXSRCS := \
+	Camera.cpp \
+	Decals.cpp \
+	Fog.cpp \
+	Frustum.cpp \
+	GameDraw.cpp \
+	GameInitDispose.cpp \
+	GameLoop.cpp \
+	GameTick.cpp \
+	Globals.cpp \
+	MacInput.cpp \
+	Main.cpp \
+	MiniAL.cpp \
+	Maths.cpp \
+	Models.cpp \
+	Person.cpp \
+	Quaternions.cpp \
+	Serialize.cpp \
+	Skeleton.cpp \
+	Sprites.cpp \
+	Support.cpp \
+	TGALoader.cpp \
+	Text.cpp \
+	Textures.cpp \
+	Timer.cpp
+
+CSRCS := \
+	thirdparty/stb_image_impl.c \
+	thirdparty/stb_vorbis.c \
+	thirdparty/glad/src/gl.c
+
+OBJS := $(addprefix $(OBJDIR)/,$(CXXSRCS:.cpp=.o) $(CSRCS:.c=.o))
+
+# ---------------------------------------------------------------- rules
+
+.PHONY: all clean romfs-stage
+.DEFAULT_GOAL := all
+
+all: $(TARGET).nro
+
+$(TARGET).nro: $(TARGET).elf $(TARGET).nacp romfs-stage
+	@echo "  nro       $@"
+	@$(TOOLS)/elf2nro $(TARGET).elf $@ --nacp=$(TARGET).nacp --romfsdir=$(ROMFSDIR) \
+		$(if $(ICON),--icon=$(ICON),)
+
+# the game's Data folder, copied where elf2nro can pack it as romfs:/Data
+.PHONY: romfs-stage
+romfs-stage:
+	@mkdir -p $(ROMFSDIR)
+	@rsync -a --delete Data $(ROMFSDIR)/ 2>/dev/null || { rm -rf $(ROMFSDIR)/Data; cp -R Data $(ROMFSDIR)/; }
+
+$(TARGET).nacp:
+	@echo "  nacp      $@"
+	@$(TOOLS)/nacptool --create "$(APP_TITLE)" "$(APP_AUTHOR)" "$(APP_VERSION)" $@
+
+$(TARGET).elf: $(OBJS)
+	@echo "  link      $@"
+	@$(CXX) $(LDFLAGS) -o $@ $(OBJS) $(LIBS)
+
+$(OBJDIR)/%.o: $(SRCDIR)/%.cpp
+	@mkdir -p $(dir $@)
+	@echo "  c++       $<"
+	@$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(OBJDIR)/%.o: $(SRCDIR)/%.c
+	@mkdir -p $(dir $@)
+	@echo "  cc        $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+clean:
+	rm -rf $(OBJDIR) $(TARGET).elf $(TARGET).nro $(TARGET).nacp $(TARGET).map
+
+-include $(OBJS:.o=.d)
+
+$(OBJS): Makefile.switch
