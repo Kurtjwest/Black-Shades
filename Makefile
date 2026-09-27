@@ -43,8 +43,10 @@ BASEFLAGS := -O2 -g $(ARCHFLAGS) $(WARNINGS) -I$(SRCDIR) -DSDL_MAIN_HANDLED
 
 ifdef USE_SYSTEM_SDL2
   SDL2_FRAMEWORK :=
-else
+else ifeq ($(UNAME_S),Darwin)
   SDL2_FRAMEWORK := $(wildcard macos/Frameworks/SDL2.framework)
+else
+  SDL2_FRAMEWORK :=
 endif
 
 ifneq ($(SDL2_FRAMEWORK),)

@@ -41,8 +41,10 @@ ROMFSDIR := $(OBJDIR)/romfs
 APP_TITLE   := Black Shades
 APP_AUTHOR  := David Rosen, SDL port
 APP_VERSION := 1.0
-# A 256x256 JPEG, if you want one; elf2nro uses its own default otherwise.
-ICON := $(wildcard macos/switch-icon.jpg)
+# The game's icon, 256x256 JPEG as the .nro wants it (icon/make-icon.py draws
+# it, along with the Mac's .icns).  elf2nro falls back to its own if the file
+# is missing.
+ICON := $(wildcard switch/icon.jpg)
 
 # ---------------------------------------------------------------- flags
 

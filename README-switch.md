@@ -35,8 +35,10 @@ from the SD card as it starts (`Settings: view distance 1, density 1,
 assassins 1, face buttons ...`), which is the quickest way to tell whether an
 edit to config.txt actually took.
 
-For an icon, put a 256x256 JPEG at `macos/switch-icon.jpg`; otherwise the .nro
-gets devkitPro's default.
+The game's own icon (`switch/icon.jpg`, the sunglasses, 256x256 as the .nro
+format wants) is built in, so hbmenu shows it rather than devkitPro's default.
+`python3 icon/make-icon.py` redraws it, the Mac's .icns and the master
+artwork together.
 
 ## Where things live
 

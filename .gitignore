@@ -5,3 +5,4 @@ build*/
 *.elf
 *.rsrc
 blackshades
+.DS_Store

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-Generate macos/BlackShades.icns (and a 1024px PNG next to it).
+Draw the game's icon: the 1024px master next to this script, the Mac's
+.icns in macos/, and the Switch's 256px JPEG in switch/.
 
 Original artwork for this port: a dark rounded tile with a pair of stylized
 shades and a faint red glow behind them.  Re-run with:
 
-    python3 macos/make-icon.py
+    python3 icon/make-icon.py
 
 Needs Pillow; the generated .icns is checked in, so this is only needed if you
 want to change the icon.
@@ -16,6 +17,7 @@ import struct
 from PIL import Image, ImageDraw, ImageFilter
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
 S = 1024  # master size
 
 
@@ -119,8 +121,21 @@ def write_icns(img, path):
         f.write(b"icns" + struct.pack(">I", len(body) + 8) + body)
 
 
+def write_switch_icon(img, path):
+    """The .nro icon hbmenu shows: 256x256, JPEG, no transparency.
+
+    hbmenu draws it as a plain square, so the rounded corners are filled with
+    the colour just inside the artwork's own edge rather than left black."""
+    icon = img.convert("RGBA").resize((256, 256), Image.LANCZOS)
+    edge = icon.getpixel((128, 3))[:3]
+    flat = Image.new("RGB", icon.size, edge)
+    flat.paste(icon, mask=icon.split()[3])
+    flat.save(path, format="JPEG", quality=92, optimize=True, progressive=False)
+
+
 if __name__ == "__main__":
     icon = render()
     icon.save(os.path.join(HERE, "BlackShades-1024.png"))
-    write_icns(icon, os.path.join(HERE, "BlackShades.icns"))
-    print("wrote BlackShades.icns")
+    write_icns(icon, os.path.join(ROOT, "macos", "BlackShades.icns"))
+    write_switch_icon(icon, os.path.join(ROOT, "switch", "icon.jpg"))
+    print("wrote icon/BlackShades-1024.png, macos/BlackShades.icns and switch/icon.jpg")
