@@ -65,14 +65,20 @@ noise before that, and the menu wants a click anyway.
 survive a reload but belong to that one browser on that one machine. Closing
 the tab mid-mission loses the score, as pulling the plug would.
 
-To change a setting, quit once so `config.txt` exists, then edit it from the
-browser's console:
+Settings live in the same `config.txt` as everywhere else, and the page has a
+**Settings** button that opens it in a text box. Edit a value, press *Save and
+restart*, and the page reloads with it - the game reads that file once, at
+startup, which is why it restarts rather than applying it live. *Reset to
+defaults* throws the file away and lets the game write a fresh one. Keys typed
+in the box do not reach the game.
+
+The console does the same thing if you prefer it:
 
 ```js
 FS.writeFile('/blackshades/config.txt',
   new TextDecoder().decode(FS.readFile('/blackshades/config.txt'))
-     .replace(/View distance: .*/, 'View distance: 0.6'));
-FS.syncfs(false, e => location.reload());
+     .replace(/(View distance[^\n]*\n)[^\n]*/, '$1' + '0.6'));
+FS.syncfs(false, () => location.reload());
 ```
 
 Frame rate is the thing to watch: `View distance` and `Population density` are

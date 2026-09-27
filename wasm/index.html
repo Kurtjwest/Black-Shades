@@ -26,6 +26,21 @@
   #splash h1 { font-weight: 300; letter-spacing: .35em; margin: 0 0 .2em; font-size: 28px; color: #eee; }
   #splash p { margin: .4em 0; }
   #splash .dim { color: #777; }
+  .dim { color: #777; }
+
+  /* config.txt, edited in place - the game only reads it at startup, so
+     saving reloads the page */
+  #settings { position: fixed; inset: 0; background: rgba(0,0,0,.88);
+              display: none; flex-direction: column; align-items: center;
+              justify-content: center; gap: 10px; padding: 20px; z-index: 10; }
+  #settings.open { display: flex; }
+  #settings h2 { font-weight: 400; font-size: 15px; margin: 0; color: #eee;
+                 letter-spacing: .1em; }
+  #settingstext { width: min(680px, 92vw); height: min(60vh, 620px);
+                  font: 12px/1.45 ui-monospace, Menlo, Consolas, monospace;
+                  color: #ddd; background: #101010; border: 1px solid #333;
+                  padding: 10px; resize: vertical; white-space: pre; }
+  #settingsrow { display: flex; gap: 10px; align-items: center; }
 </style>
 </head>
 <body>
@@ -41,7 +56,19 @@
 
 <div id="panel" class="hidden">
   <span class="dim">click the game to take the mouse &mdash; Esc lets go</span>
+  <button id="settingsbutton">Settings</button>
   <button id="fullscreen">Fullscreen</button>
+</div>
+
+<div id="settings">
+  <h2>config.txt</h2>
+  <textarea id="settingstext" spellcheck="false"></textarea>
+  <div id="settingsrow">
+    <button id="settingssave">Save and restart</button>
+    <button id="settingscancel">Cancel</button>
+    <button id="settingsreset">Reset to defaults</button>
+    <span class="dim">the game reads this once, at startup</span>
+  </div>
 </div>
 
 <script>
@@ -60,6 +87,64 @@
     panel.classList.remove('hidden');
     canvas.focus();
   }
+
+  // ---- config.txt, edited from the page -------------------------------
+  // The game writes the file itself the first time it runs and reads it only
+  // at startup, so this edits what is there and starts again.
+  var settings     = document.getElementById('settings');
+  var settingstext = document.getElementById('settingstext');
+  var CONFIG       = '/blackshades/config.txt';
+
+  function closeSettings() {
+    settings.classList.remove('open');
+    canvas.focus();
+  }
+
+  // Keys typed in here must not also reach the game: SDL listens on the
+  // window, so stopping the event on its way up is enough, and the textarea
+  // itself still gets it.
+  ['keydown', 'keyup', 'keypress'].forEach(function (ev) {
+    settings.addEventListener(ev, function (e) { e.stopPropagation(); });
+  });
+
+  function saveAndReload(text) {
+    try {
+      if (text === null) FS.unlink(CONFIG);      // reset: the game rewrites it
+      else FS.writeFile(CONFIG, text);
+      FS.syncfs(false, function (err) {
+        if (err) { alert('could not save: ' + err); return; }
+        location.reload();
+      });
+    } catch (e) {
+      alert('could not save: ' + e);
+    }
+  }
+
+  document.getElementById('settingsbutton').addEventListener('click', function () {
+    var text;
+    try {
+      text = new TextDecoder().decode(FS.readFile(CONFIG));
+    } catch (e) {
+      text = null;
+    }
+    if (text === null) {
+      alert('No config.txt yet - the game writes one as it starts. ' +
+            'Give it a moment and try again.');
+      return;
+    }
+    if (document.exitPointerLock) document.exitPointerLock();
+    settingstext.value = text;
+    settings.classList.add('open');
+    settingstext.focus();
+  });
+
+  document.getElementById('settingssave').addEventListener('click', function () {
+    saveAndReload(settingstext.value);
+  });
+  document.getElementById('settingscancel').addEventListener('click', closeSettings);
+  document.getElementById('settingsreset').addEventListener('click', function () {
+    if (confirm('Put every setting back to the way it shipped?')) saveAndReload(null);
+  });
 
   document.getElementById('fullscreen').addEventListener('click', function () {
     if (canvas.requestFullscreen) canvas.requestFullscreen();
