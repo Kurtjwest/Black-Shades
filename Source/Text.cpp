@@ -7,12 +7,39 @@ void Text::LoadFontTexture(char *fileName)
 	FontTexture = loadTexture(fileName);
 }
 
+#ifdef __EMSCRIPTEN__
+
+/* WebGL has no display lists.  Each of the 256 lists below is one quad off
+   the font texture followed by a step to the right, so on the web the quad is
+   drawn where the list would have been called instead - same geometry, same
+   order, nothing recorded. */
+static void DrawFontChar(int which)
+{
+	const float cx = float(which % 16) / 16.0f;
+	const float cy = float(which / 16) / 16.0f;
+
+	glBegin(GL_QUADS);
+		glTexCoord2f(cx,         1-cy-0.0625f+.001f);	glVertex2i( 0, 0);
+		glTexCoord2f(cx+0.0625f, 1-cy-0.0625f+.001f);	glVertex2i(16, 0);
+		glTexCoord2f(cx+0.0625f, 1-cy-.001f);			glVertex2i(16,16);
+		glTexCoord2f(cx,         1-cy-.001f);			glVertex2i( 0,16);
+	glEnd();
+	glTranslated(10,0,0);
+}
+
+void Text::BuildFont()								// nothing to build
+{
+	base=0;
+}
+
+#else
+
 void Text::BuildFont()								// Build Our Font Display List
 {
 	float	cx;											// Holds Our X Character Coord
 	float	cy;											// Holds Our Y Character Coord
 	int loop;
-	
+
 	base=glGenLists(256);								// Creating 256 Display Lists
 	glBindTexture(GL_TEXTURE_2D, FontTexture);			// Select Our Font Texture
 	for (loop=0; loop<256; loop++)						// Loop Through All 256 Lists
@@ -36,6 +63,8 @@ void Text::BuildFont()								// Build Our Font Display List
 	}													// Loop Until All 256 Are Built
 }
 
+#endif
+
 void Text::glPrint(GLint x, GLint y, char *string, int set, float size, float width, float height)	// Where The Printing Happens
 {
 	if (set>1)
@@ -57,8 +86,18 @@ void Text::glPrint(GLint x, GLint y, char *string, int set, float size, float wi
 	glLoadIdentity();
 	glScalef(size,size,1);									// Reset The Modelview Matrix
 	glTranslated(x,y,0);								// Position The Text (0,0 - Bottom Left)
+#ifdef __EMSCRIPTEN__
+	/* what glCallLists would have done: GL_BYTE means the characters are
+	   signed, and a list outside the 256 that were built draws nothing */
+	for (const char *c = string; *c; c++)
+	{
+		const int which = (int)(signed char)*c - 32 + 128*set;
+		if (which >= 0 && which < 256) DrawFontChar(which);
+	}
+#else
 	glListBase(base-32+(128*set));						// Choose The Font Set (0 or 1)
 	glCallLists(strlen(string),GL_BYTE,string);			// Write The Text To The Screen
+#endif
 	glMatrixMode(GL_PROJECTION);						// Select The Projection Matrix
 	glPopMatrix();										// Restore The Old Projection Matrix
 	glMatrixMode(GL_MODELVIEW);							// Select The Modelview Matrix

@@ -4017,6 +4017,13 @@ int Game::InitGL(void)
 	                     SDL_WINDOW_ALLOW_HIGHDPI;
 	if (startfullscreen) windowflags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
 
+#ifdef __EMSCRIPTEN__
+	/* A browser only goes fullscreen from a click, which has not happened
+	   yet; the page has a button for it instead.  The canvas is the window,
+	   and the page keeps it in view. */
+	windowflags &= ~(Uint32)(SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_ALLOW_HIGHDPI);
+#endif
+
 #ifdef __SWITCH__
 	/* The screen is the window: 1280x720 handheld, 1920x1080 docked, and SDL
 	   says when that changes - the size-changed event resizes the viewport

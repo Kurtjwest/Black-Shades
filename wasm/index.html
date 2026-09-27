@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Black Shades</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #000; color: #b8b8b8;
+               font: 13px/1.5 "Helvetica Neue", Helvetica, Arial, sans-serif; }
+  body { display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  /* room at the bottom for the bar, so it never sits over the game's own HUD */
+  #canvas { display: block; background: #000; border: 0; outline: none;
+            max-width: 100vw; max-height: calc(100vh - 34px); }
+  #canvas.loading { display: none; }
+  #panel { position: fixed; left: 0; right: 0; bottom: 0; padding: 6px 10px;
+           display: flex; gap: 14px; align-items: center; justify-content: center;
+           background: rgba(0,0,0,.6); font-size: 12px; }
+  #panel.hidden { display: none; }
+  #status { min-width: 20em; text-align: center; }
+  #bar { width: 260px; height: 4px; background: #222; }
+  #bar > div { height: 100%; width: 0; background: #888; }
+  button { font: inherit; color: #ddd; background: #1c1c1c; border: 1px solid #444;
+           padding: 3px 10px; cursor: pointer; }
+  button:hover { background: #2a2a2a; }
+  #splash { text-align: center; max-width: 34em; padding: 0 1em; }
+  #splash h1 { font-weight: 300; letter-spacing: .35em; margin: 0 0 .2em; font-size: 28px; color: #eee; }
+  #splash p { margin: .4em 0; }
+  #splash .dim { color: #777; }
+</style>
+</head>
+<body>
+
+<div id="splash">
+  <h1>BLACK SHADES</h1>
+  <p class="dim">David Rosen, 2002 &mdash; SDL2 port, in the browser</p>
+  <p id="status">loading&hellip;</p>
+  <div id="bar" style="margin: 0 auto"><div id="barfill"></div></div>
+</div>
+
+<canvas id="canvas" class="loading" tabindex="-1" oncontextmenu="event.preventDefault()"></canvas>
+
+<div id="panel" class="hidden">
+  <span class="dim">click the game to take the mouse &mdash; Esc lets go</span>
+  <button id="fullscreen">Fullscreen</button>
+</div>
+
+<script>
+(function () {
+  var canvas   = document.getElementById('canvas');
+  var splash   = document.getElementById('splash');
+  var statusEl = document.getElementById('status');
+  var barfill  = document.getElementById('barfill');
+  var panel    = document.getElementById('panel');
+
+  // The game asks SDL for a window and SDL sizes the canvas to match, so the
+  // size comes from config.txt rather than from here.
+  function running() {
+    splash.style.display = 'none';
+    canvas.classList.remove('loading');
+    panel.classList.remove('hidden');
+    canvas.focus();
+  }
+
+  document.getElementById('fullscreen').addEventListener('click', function () {
+    if (canvas.requestFullscreen) canvas.requestFullscreen();
+    else if (canvas.webkitRequestFullscreen) canvas.webkitRequestFullscreen();
+    canvas.focus();
+  });
+
+  // Keys have to reach the game rather than scrolling the page.
+  window.addEventListener('keydown', function (e) {
+    if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space','Tab'].indexOf(e.code) >= 0)
+      e.preventDefault();
+  }, false);
+
+  window.Module = {
+    canvas: canvas,
+    print:    function (t) { console.log(t); },
+    printErr: function (t) { console.error(t); },
+
+    totalDependencies: 0,
+    monitorRunDependencies: function (left) {
+      this.totalDependencies = Math.max(this.totalDependencies, left);
+      if (left === 0) return;
+      var done = this.totalDependencies - left;
+      barfill.style.width = (100 * done / this.totalDependencies) + '%';
+    },
+    setStatus: function (text) {
+      var m = /([^(]+)\((\d+(\.\d+)?)\/(\d+)\)/.exec(text);
+      if (m) {
+        barfill.style.width = (100 * parseFloat(m[2]) / parseFloat(m[4])) + '%';
+        text = m[1];
+      }
+      statusEl.textContent = text || '';
+      if (!text) running();
+    },
+    onRuntimeInitialized: running
+  };
+
+  window.onerror = function (message) {
+    statusEl.textContent = 'it stopped: ' + message + ' (the console has the rest)';
+    splash.style.display = '';
+  };
+})();
+</script>
+<script async src="blackshades.js"></script>
+</body>
+</html>

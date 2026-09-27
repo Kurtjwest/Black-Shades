@@ -18,11 +18,20 @@ Game game;
 
 /********************> main() <*****/
 
+/* A browser has no command line to pass in, and taking argc/argv renames
+   main() to __main_argc_argv - which some Emscripten releases (Debian's 3.1.6
+   among them) then fail to find, linking a module with nothing in it. */
+#ifdef __EMSCRIPTEN__
+int	main( void )
+#else
 int 	main( int argc, char *argv[] )
+#endif
 
 	{
 
+#ifndef __EMSCRIPTEN__
 	(void)argc; (void)argv;
+#endif
 
 
 #ifdef OS9

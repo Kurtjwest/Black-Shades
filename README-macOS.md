@@ -486,6 +486,16 @@ A Nintendo Switch homebrew target (devkitPro/libnx) lives in
 `Makefile.switch`, built with `make switch`, with everything it needs behind
 `#ifdef __SWITCH__`. It has never run on a console; see `README-switch.md`.
 
+A WebAssembly target (Emscripten) lives in `Makefile.wasm`, built with
+`make wasm`, with its differences behind `#ifdef __EMSCRIPTEN__`. That one has
+been built and played — in a browser the game runs on WebGL through
+Emscripten's fixed-function emulation, and saves to IndexedDB; see
+`README-wasm.md` for the two or three places the web needed something
+different.
+
+Both targets keep their own object directory and their own flags, so building
+either leaves the desktop build exactly where it was.
+
 ## Repository notes
 
 This is an SVN checkout, so `svn diff` shows the whole port and `svn revert`

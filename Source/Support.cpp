@@ -6,6 +6,10 @@
  * ":Data:Models:Head.solid" names), and Ogg Vorbis decoding.
  */
 
+/* this file implements the web's glEnable/glColor stand-ins (GLHeaders.h),
+   so it wants the real entry points rather than the macros that call them */
+#define BS_GL_SHIM_IMPLEMENTATION 1
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/types.h>
@@ -24,6 +28,10 @@
 
 #ifdef __SWITCH__
 #include <switch.h>
+#endif
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
 #endif
 
 SDL_Window   *g_window    = NULL;
@@ -289,6 +297,79 @@ void PlatformSetViewport(void)
 	if (w > 0 && h > 0) glViewport(0, 0, w, h);
 }
 
+#ifdef __EMSCRIPTEN__
+/* Files written into the IndexedDB mount are only really there once the
+   filesystem is flushed back to the browser. */
+void PlatformCommitSave(void)
+{
+	EM_ASM(
+		FS.syncfs(false, function (err) { if (err) console.warn("save failed", err); });
+	);
+}
+
+/* ----------------------------------------------------------------------
+   GL_COLOR_MATERIAL, which the emulation has not got (see GLHeaders.h).
+   These are the functions the glEnable/glDisable/glColor macros call; the
+   define above keeps the macros out of this file so the calls here are the
+   real ones.
+   ---------------------------------------------------------------------- */
+
+static bool  gl_colormaterial = false;
+static bool  gl_lighting      = false;
+static float gl_color[4]      = { 1, 1, 1, 1 };
+
+/* what a GL implementation starts with, and what it goes back to when the
+   game turns colour material off */
+static const GLfloat material_default_ambient[4] = { 0.2f, 0.2f, 0.2f, 1.0f };
+static const GLfloat material_default_diffuse[4] = { 0.8f, 0.8f, 0.8f, 1.0f };
+
+/* The emulation takes GL_AMBIENT and GL_DIFFUSE one at a time and throws on
+   GL_AMBIENT_AND_DIFFUSE, which is the mode colour material defaults to. */
+static void SetMaterial(const GLfloat *rgba)
+{
+	glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT, rgba);
+	glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE, rgba);
+}
+
+extern "C" void BS_Color4f(GLfloat r, GLfloat g, GLfloat b, GLfloat a)
+{
+	glColor4f(r, g, b, a);
+
+	if (r == gl_color[0] && g == gl_color[1] && b == gl_color[2] && a == gl_color[3])
+		return;                                  /* the usual case: no change */
+	gl_color[0] = r; gl_color[1] = g; gl_color[2] = b; gl_color[3] = a;
+	if (gl_colormaterial) SetMaterial(gl_color);
+}
+
+extern "C" void BS_Enable(GLenum cap)
+{
+	if (cap == GL_COLOR_MATERIAL) {
+		gl_colormaterial = true;
+		SetMaterial(gl_color);
+		return;                       /* WebGL has never heard of this one */
+	}
+	if (cap == GL_LIGHTING) gl_lighting = true;
+	glEnable(cap);
+}
+
+extern "C" void BS_Disable(GLenum cap)
+{
+	if (cap == GL_COLOR_MATERIAL) {
+		gl_colormaterial = false;
+		glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT, material_default_ambient);
+		glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE, material_default_diffuse);
+		return;
+	}
+	if (cap == GL_LIGHTING) gl_lighting = false;
+	glDisable(cap);
+}
+
+extern "C" int BS_LightingEnabled(void)
+{
+	return gl_lighting ? 1 : 0;
+}
+#endif
+
 void PlatformSwapBuffers(void)
 {
 	if (g_window) SDL_GL_SwapWindow(g_window);
@@ -326,6 +407,15 @@ static bool DirHasData(const char *dir)
 void PlatformInitPaths(void)
 {
 	if (g_dataRoot[0]) return;
+#ifdef __EMSCRIPTEN__
+	/* Data is preloaded into the virtual filesystem at /Data, and the
+	   settings live in an IndexedDB mount that survives a reload (see
+	   wasm/pre.js). */
+	snprintf(g_dataRoot, sizeof(g_dataRoot), "/");
+	snprintf(g_prefRoot, sizeof(g_prefRoot), "/blackshades/");
+	mkdir("/blackshades", 0777);
+	return;
+#endif
 #ifdef __SWITCH__
 	/* Data rides along inside the .nro as romfs; saves go next to the other
 	   homebrew on the SD card, where you can copy them off. */

@@ -60,7 +60,12 @@ void PlatformPadPointerTo(int x, int y);     /* put it somewhere (touch) */
 
 #ifdef __SWITCH__
 bool PlatformLoadGL(void);             /* glad, once the GL context exists */
-void PlatformCommitSave(void);         /* flush the SD card after a save */
+#endif
+
+#if defined(__SWITCH__) || defined(__EMSCRIPTEN__)
+/* The Switch's SD card and the browser's IndexedDB both need telling that a
+   file has been written; everywhere else the filesystem has it already. */
+void PlatformCommitSave(void);
 #else
 #define PlatformCommitSave() ((void)0)
 #endif

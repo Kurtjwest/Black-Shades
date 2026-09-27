@@ -92,6 +92,7 @@ class Game
 		void	DoEvent( EventRecord *event );
 #endif
 		void	EventLoop( void );
+		void	Frame( void );      /* one pass of it, so a browser can drive it itself */
 		void 	Tick();
 		void 	Splat(int k);
 		void 	InitGame();

@@ -44,6 +44,13 @@ GLuint loadTexture(const char* filename_, GLenum minFilter, GLenum magFilter, bo
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, minFilter);
 
 	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+#ifdef __EMSCRIPTEN__
+	/* WebGL has no GL_GENERATE_MIPMAP parameter - it builds the chain on
+	   demand instead, which is what GL 3.0 settled on too. */
+	glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, width, height, 0,
+	             format, GL_UNSIGNED_BYTE, pixels);
+	if (mipmaps) glGenerateMipmap(GL_TEXTURE_2D);
+#else
 	if (mipmaps) {
 		glTexParameteri(GL_TEXTURE_2D, GL_GENERATE_MIPMAP, GL_TRUE);
 	}
@@ -52,6 +59,7 @@ GLuint loadTexture(const char* filename_, GLenum minFilter, GLenum magFilter, bo
 	if (mipmaps) {
 		glTexParameteri(GL_TEXTURE_2D, GL_GENERATE_MIPMAP, GL_FALSE);
 	}
+#endif
 
 	stbi_image_free(pixels);
 	return tex;

@@ -1,4 +1,8 @@
-#include "Game.h"	
+#include "Game.h"
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif	
 
 
 
@@ -488,12 +492,21 @@ static void PadOpen(int joystickindex)
 	g_padswapguess = false;
 #else
 	/* SDL hands a Nintendo pad over by label unless its driver honours the
-	   hint set in InitGL, which not all of them do (macOS's does not) */
+	   hint set in InitGL, which not all of them do (macOS's does not).
+	   SDL_GameControllerGetType arrived in 2.0.12 and the Joy-Con types in
+	   2.24, and some builds are older than that (Emscripten's is 2.0.20),
+	   so anything missing just leaves the guess at "not swapped" - the
+	   config file overrides it either way. */
+#if SDL_VERSION_ATLEAST(2,0,12)
 	const SDL_GameControllerType type = SDL_GameControllerGetType(g_pad);
-	g_padswapguess = type == SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_PRO ||
-	                 type == SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_LEFT ||
-	                 type == SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_RIGHT ||
-	                 type == SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_PAIR;
+	g_padswapguess = type == SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_PRO
+#if SDL_VERSION_ATLEAST(2,24,0)
+	              || type == SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_LEFT
+	              || type == SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_RIGHT
+	              || type == SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_PAIR
+#endif
+	                 ;
+#endif
 #endif
 	fprintf(stderr, "Controller: %s - face buttons %s\n", SDL_GameControllerName(g_pad),
 	        g_padswapguess ? "swapped: the bottom button is SDL's B" :
@@ -727,7 +740,9 @@ void Game::UpdateMouseGrab()
 
 /********************> EventLoop() <*****/
 
-void	Game::EventLoop( void )
+/* One pass of the loop below: a browser has an animation callback of its own
+   and calls this from it, so a pass declares everything it needs. */
+void	Game::Frame( void )
 
 {
 
@@ -741,9 +756,8 @@ void	Game::EventLoop( void )
 
 	double oldmult;
 
-	gQuit = false;
 
-	while ( gQuit == false )
+	/* what one pass of the old loop did: */
 
 	{
 
@@ -809,6 +823,9 @@ void	Game::EventLoop( void )
 		/* Frame limiter.  The original spun here; sleeping through the bulk
 		   of the wait keeps a core (and a laptop battery) free while landing
 		   on the same frame time. */
+#ifndef __EMSCRIPTEN__
+		/* In a browser the animation callback paces the frames; spinning here
+		   would only burn the one it just gave us. */
 		while(framespersecond>maxfps){
 
 			double timeleft=600000000/(double)maxfps-timetaken;
@@ -822,6 +839,7 @@ void	Game::EventLoop( void )
 			framespersecond=600000000/timetaken;
 
 		}
+#endif
 
 		multiplier5=multiplier4;
 
@@ -899,4 +917,41 @@ void	Game::EventLoop( void )
 
 	}
 
+}
+
+#ifdef __EMSCRIPTEN__
+/* The browser will not let anything keep the thread to itself.  Quitting has
+   to be dealt with here as well: emscripten_set_main_loop never comes back,
+   so the shutdown main() would have done - which is what writes the high
+   score and config.txt - happens at the end of the last frame instead. */
+static void EmscriptenFrame(void *game)
+{
+	Game *g = (Game *)game;
+
+	g->Frame();
+
+	if (g->gQuit) {
+		emscripten_cancel_main_loop();
+		g->Dispose();                  /* saves, then lets go of SDL */
+		EM_ASM({
+			var s = document.getElementById('status');
+			if (s) s.textContent = 'Thanks for playing. Reload to start again.';
+			var p = document.getElementById('splash');
+			if (p) p.style.display = '';
+			var c = document.getElementById('canvas');
+			if (c) c.style.display = 'none';
+		});
+	}
+}
+#endif
+
+void	Game::EventLoop( void )
+{
+	gQuit = false;
+
+#ifdef __EMSCRIPTEN__
+	emscripten_set_main_loop_arg(EmscriptenFrame, this, 0, 1);   //never returns
+#else
+	while (gQuit == false) Frame();
+#endif
 }

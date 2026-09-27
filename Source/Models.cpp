@@ -192,6 +192,15 @@ extern int nocolors;
 void Model::draw()
 {
 	if(!nocolors){
+#ifdef __EMSCRIPTEN__
+	/* A colour array is the one thing the web's GL emulation will not take
+	   alongside lighting - it builds the vertex colour from the material and
+	   ignores the array - so the model is drawn unlit and keeps the colours
+	   it is made of.  It loses the sun on its faces; a person you cannot
+	   tell the colour of is worse. */
+	const bool relight = BS_LightingEnabled() != 0;
+	if(relight) glDisable(GL_LIGHTING);
+#endif
 	glEnableClientState(GL_VERTEX_ARRAY);
 	glEnableClientState(GL_NORMAL_ARRAY);
 	glEnableClientState(GL_COLOR_ARRAY);
@@ -199,6 +208,9 @@ void Model::draw()
 	glNormalPointer(GL_FLOAT, 9*sizeof(GLfloat),&vArray[3]);
 	glColorPointer(3,GL_FLOAT, 9*sizeof(GLfloat),&vArray[6]);
 	glDrawArrays(GL_TRIANGLES, 0, TriangleNum*3);
+#ifdef __EMSCRIPTEN__
+	if(relight) glEnable(GL_LIGHTING);
+#endif
 	}
 	if(nocolors){
 		glColor4f(0,0,0,1);

@@ -1,0 +1,128 @@
+# Makefile.wasm - WebAssembly build (Emscripten).
+#
+#   source /path/to/emsdk/emsdk_env.sh      # or: apt install emscripten
+#   make -f Makefile.wasm                   # or: make wasm
+#   make -f Makefile.wasm serve             # then open http://localhost:8000/
+#
+# Produces build-wasm/: index.html plus blackshades.{js,wasm,data}.  Copy that
+# folder to a web server and that is the game.  The Data folder is
+# packed into blackshades.data and mounted at /Data; config.txt and the high
+# scores go to an IndexedDB mount at /blackshades (see wasm/pre.js), so they
+# survive a reload.
+#
+# Nothing here is shared with the desktop Makefile: separate object directory
+# (build-wasm), separate flags, separate output.  The game's own sources are
+# the same files, with the browser's differences behind __EMSCRIPTEN__.
+#
+# See README-wasm.md for what works and what does not.
+
+EMCC ?= emcc
+EMXX ?= em++
+
+TARGET := blackshades
+OBJDIR := build-wasm
+SRCDIR := Source
+
+# ---------------------------------------------------------------- flags
+
+WARNINGS := -Wall -Wno-unused-variable -Wno-unused-but-set-variable \
+            -Wno-unused-value -Wno-parentheses -Wno-write-strings \
+            -Wno-sign-compare -Wno-format-security -Wno-misleading-indentation \
+            -Wno-deprecated-declarations
+
+DEFINES  := -DSDL_MAIN_HANDLED
+INCLUDES := -I$(SRCDIR)
+
+# USE_SDL=2 is Emscripten's own SDL2; LEGACY_GL_EMULATION is what lets a
+# fixed-function renderer (glBegin, the matrix stack, lighting, fog) run on
+# WebGL at all, and it only exists for WebGL 1.
+EMFLAGS := -sUSE_SDL=2 -sLEGACY_GL_EMULATION=1 -sMAX_WEBGL_VERSION=1
+
+BASEFLAGS := -O2 $(DEFINES) $(INCLUDES) $(EMFLAGS) -MMD -MP
+CXXFLAGS  := $(BASEFLAGS) $(WARNINGS) -include $(SRCDIR)/Support.h
+CFLAGS    := $(BASEFLAGS) -Wall -Wno-unused-value
+
+# A person is about 125 KB and the crowd is the whole memory budget, so the
+# heap grows rather than being reserved up front.  wasm32 cannot go past 4 GB
+# however the settings are turned up.
+LDFLAGS := $(EMFLAGS) -O2 \
+           -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=128MB -sMAXIMUM_MEMORY=2GB \
+           -sEXIT_RUNTIME=0 -sFORCE_FILESYSTEM=1 -lidbfs.js \
+           --preload-file Data \
+           --pre-js wasm/pre.js
+
+# ---------------------------------------------------------------- sources
+#
+# The desktop Makefile's list (AGL_DSp.cpp, Alerts.cpp and Files.cpp are the
+# Mac OS 9 originals and are not built anywhere).
+
+CXXSRCS := \
+	Camera.cpp \
+	Decals.cpp \
+	Fog.cpp \
+	Frustum.cpp \
+	GameDraw.cpp \
+	GameInitDispose.cpp \
+	GameLoop.cpp \
+	GameTick.cpp \
+	Globals.cpp \
+	MacInput.cpp \
+	Main.cpp \
+	MiniAL.cpp \
+	Maths.cpp \
+	Models.cpp \
+	Person.cpp \
+	Quaternions.cpp \
+	Serialize.cpp \
+	Skeleton.cpp \
+	Sprites.cpp \
+	Support.cpp \
+	TGALoader.cpp \
+	Text.cpp \
+	Textures.cpp \
+	Timer.cpp
+
+CSRCS := \
+	thirdparty/stb_image_impl.c \
+	thirdparty/stb_vorbis.c
+
+OBJS := $(addprefix $(OBJDIR)/,$(CXXSRCS:.cpp=.o) $(CSRCS:.c=.o))
+
+# ---------------------------------------------------------------- rules
+
+.PHONY: all clean serve
+.DEFAULT_GOAL := all
+
+all: $(OBJDIR)/index.html
+
+# The page is ours (wasm/index.html) rather than emcc's generated one: it
+# loads blackshades.js, shows the loading bar and keeps the keyboard on the
+# canvas.  It also avoids emcc's html minifier, which is a separate install.
+$(OBJDIR)/index.html: $(OBJDIR)/$(TARGET).js wasm/index.html
+	@cp wasm/index.html $@
+
+$(OBJDIR)/$(TARGET).js: $(OBJS) wasm/pre.js $(wildcard Data)
+	@echo "  link      $@"
+	@$(EMXX) $(LDFLAGS) -o $@ $(OBJS)
+
+$(OBJDIR)/%.o: $(SRCDIR)/%.cpp
+	@mkdir -p $(dir $@)
+	@echo "  c++       $<"
+	@$(EMXX) $(CXXFLAGS) -c $< -o $@
+
+$(OBJDIR)/%.o: $(SRCDIR)/%.c
+	@mkdir -p $(dir $@)
+	@echo "  cc        $<"
+	@$(EMCC) $(CFLAGS) -c $< -o $@
+
+# a web server, because a file:// page cannot fetch the .wasm or the .data
+serve: all
+	@echo "http://localhost:8000/"
+	@python3 -m http.server -d $(OBJDIR) 8000
+
+clean:
+	rm -rf $(OBJDIR)
+
+-include $(OBJS:.o=.d)
+
+$(OBJS): Makefile.wasm
