@@ -818,6 +818,25 @@ void	Game::Frame( void )
 
 		timetaken=end-start;
 
+#ifdef __EMSCRIPTEN__
+		/* Everywhere else the limiter below spins until the frame has taken
+		   its full time, so what it measures is the time from one frame to
+		   the next.  In a browser the animation callback does the waiting, so
+		   the work above is only part of the frame and the rest is spent
+		   outside this function - time the game would never be told about,
+		   and it would run in slow motion by exactly that fraction.  Measure
+		   from the end of the last frame to the end of this one instead. */
+		{
+			static double lastframeend = -1;
+			if (lastframeend >= 0) timetaken = end - lastframeend;
+			lastframeend = end;
+		}
+		/* A backgrounded tab gets no frames at all, so the gap on the way
+		   back can be minutes; the multiplier clamp below already holds a
+		   step to six tenths of a second, which is what a machine that
+		   stalls gets everywhere else. */
+#endif
+
 		framespersecond=600000000/timetaken;
 
 		/* Frame limiter.  The original spun here; sleeping through the bulk

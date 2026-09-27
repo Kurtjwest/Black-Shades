@@ -35,7 +35,9 @@ INCLUDES := -I$(SRCDIR)
 
 # USE_SDL=2 is Emscripten's own SDL2; LEGACY_GL_EMULATION is what lets a
 # fixed-function renderer (glBegin, the matrix stack, lighting, fog) run on
-# WebGL at all, and it only exists for WebGL 1.
+# WebGL at all, and it only exists for WebGL 1.  Any Emscripten from 3.1 to
+# the current 6.x has all three; the run-dependency calls in wasm/pre.js need
+# naming in EXPORTED_RUNTIME_METHODS below, which later versions insist on.
 EMFLAGS := -sUSE_SDL=2 -sLEGACY_GL_EMULATION=1 -sMAX_WEBGL_VERSION=1
 
 BASEFLAGS := -O2 $(DEFINES) $(INCLUDES) $(EMFLAGS) -MMD -MP
@@ -48,6 +50,7 @@ CFLAGS    := $(BASEFLAGS) -Wall -Wno-unused-value
 LDFLAGS := $(EMFLAGS) -O2 \
            -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=128MB -sMAXIMUM_MEMORY=2GB \
            -sEXIT_RUNTIME=0 -sFORCE_FILESYSTEM=1 -lidbfs.js \
+           -sEXPORTED_RUNTIME_METHODS=FS,addRunDependency,removeRunDependency \
            --preload-file Data \
            --pre-js wasm/pre.js
 

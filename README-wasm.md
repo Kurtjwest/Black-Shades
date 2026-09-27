@@ -14,11 +14,12 @@ sound coming out of actual speakers.
 ## Building
 
 ```sh
-# either the SDK
+# either the SDK - install "latest", not a version number: arm64 builds of
+# the toolchain only exist for recent releases (emsdk issue #547)
 git clone https://github.com/emscripten-core/emsdk && emsdk/emsdk install latest && emsdk/emsdk activate latest
 source emsdk/emsdk_env.sh
 # or the distribution's package
-sudo apt install emscripten
+sudo apt install emscripten          # brew install emscripten on a Mac
 
 make wasm                 # or: make -f Makefile.wasm
 make -f Makefile.wasm serve     # http://localhost:8000/
@@ -26,6 +27,11 @@ make -f Makefile.wasm serve     # http://localhost:8000/
 
 The first build fetches and compiles Emscripten's SDL2 port, which takes a
 couple of minutes; after that it is cached.
+
+Any Emscripten from 3.1 onwards should do. The settings this build leans on -
+`USE_SDL=2`, `LEGACY_GL_EMULATION`, `MAX_WEBGL_VERSION` - are all still there
+in the current 6.x, and the run-dependency calls the loading page makes are
+named in `EXPORTED_RUNTIME_METHODS`, which the later releases insist on.
 
 `make wasm` only runs `Makefile.wasm`, which has its own object directory
 (`build-wasm`), its own flags and its own source list. The desktop Makefile is
@@ -81,6 +87,13 @@ browser on a laptop will not enjoy that as much as a desktop does.
   same `while (!gQuit) Frame();` it always did. Quitting is handled in the
   frame callback, because the main loop never returns to `main()`, and that is
   what writes the high score.
+* **The time step.** Everywhere else the frame limiter spins until the frame
+  has taken its full time, so what the game measures is the time from one
+  frame to the next. In a browser the animation callback does that waiting,
+  outside the function, and measuring only the work would have left out the
+  rest of the frame - the game ran in slow motion by exactly that fraction.
+  The step is now the time from the end of one frame to the end of the next,
+  which is the same quantity every other platform ends up with.
 * **OpenGL.** `-sLEGACY_GL_EMULATION` puts a fixed-function layer over WebGL 1,
   which covers glBegin/glEnd, the matrix stack, lighting, fog and clip planes.
   The three things it does not cover are patched around:
