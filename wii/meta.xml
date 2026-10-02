@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<app version="1">
+	<name>Black Shades</name>
+	<coder>David Rosen; SDL2 port</coder>
+	<version>1.0</version>
+	<release_date>20260927</release_date>
+	<short_description>Psychic bodyguard simulator</short_description>
+	<long_description>You are a psychic bodyguard. Keep your client alive: watch the crowd, find the assassin before the shot, and put him down.
+
+Point the Wiimote where you want the gun; the nunchuk stick walks and turns. B fires. See README-wii.md for the rest of the controls.
+
+Black Shades was written by David Rosen for uDevGame 2002 and is under the uDevGame Limited Use License.</long_description>
+</app>

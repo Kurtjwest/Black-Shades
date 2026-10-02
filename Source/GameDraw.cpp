@@ -14,6 +14,10 @@ extern unsigned int gSampleSet[100];
 
 extern Camera camera;
 
+extern int pointeraim;      /* the crosshair below only exists when this is on */
+extern float aimrotation;
+extern float aimrotation2;
+
 extern Sprites sprites;
 
 extern float camerashake;
@@ -336,6 +340,8 @@ int Game::DrawGLScene(void)
 
 		glMatrixMode(GL_MODELVIEW);			
 
+		glPushMatrix();										// Store The Modelview Matrix
+
 		glDisable(GL_TEXTURE_2D);
 
 
@@ -402,7 +408,20 @@ int Game::DrawGLScene(void)
 
 		glEnd();
 
-		glPopMatrix();
+		/* Both stacks, and in the right mode for each.  This pushed the
+		   projection and then popped the modelview, so every frame the
+		   menu drew leaked a projection level and underflowed a
+		   modelview one.  A desktop has 32 projection slots and hides
+		   it; opengx has four, so on a Wii the stack was full within
+		   four frames and every later pop handed the world back a
+		   leftover HUD matrix. */
+		glPopMatrix();										// Restore The Old Modelview Matrix
+
+		glMatrixMode(GL_PROJECTION);						// Select The Projection Matrix
+
+		glPopMatrix();										// Restore The Old Projection Matrix
+
+		glMatrixMode(GL_MODELVIEW);							// Select The Modelview Matrix
 
 		
 		olddrawmouse=mouseloc;
@@ -1352,9 +1371,10 @@ int Game::DrawGLScene(void)
 
 			glDepthMask(1);
 
-		}	
+		}
 
-		
+
+
 
 		//Flash
 
@@ -1632,6 +1652,72 @@ int Game::DrawGLScene(void)
 		*/	
 
 	}
+
+		/* The crosshair, which only exists when a pointer is doing the
+		   aiming: the gun is pointed at this spot, so something has to mark
+		   it.  Not while scoped, which has a sight of its own, and not in
+		   the menu, which has its own cursor.  It is drawn whether or not
+		   the gun happens to be raised - the pointer is still what you pick
+		   things up and disarm people with. */
+		if(pointeraim&&!zoom&&!mainmenu&&person[0].health>0){
+
+			float px,py;
+
+			/* drawn wherever the pointer last was, so it holds still
+			   through a blink instead of disappearing */
+			PointerPosition(&px,&py);
+
+			{
+
+
+
+				const float x=(px+1)*screenwidth /2;
+				const float y=screenheight-(py+1)*screenheight/2;
+				const float r=10,gap=4;
+
+				glDisable(GL_DEPTH_TEST);
+				glDisable(GL_CULL_FACE);
+				glDisable(GL_LIGHTING);
+				glDisable(GL_TEXTURE_2D);
+				glDisable(GL_ALPHA_TEST);
+				glDisable(GL_FOG);
+				glDepthMask(0);
+				glEnable(GL_BLEND);
+				glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+				glMatrixMode(GL_PROJECTION);
+				glPushMatrix();
+				glLoadIdentity();
+				glOrtho(0,screenwidth,0,screenheight,-100,100);
+				glMatrixMode(GL_MODELVIEW);
+				glPushMatrix();
+				glLoadIdentity();
+
+				/* four ticks around a gap, so whatever is under it stays
+				   visible - the thing you are about to shoot */
+				glColor4f(1,1,1,.85);
+				glLineWidth(2);
+				glBegin(GL_LINES);
+					glVertex3f(x-r,y,0);   glVertex3f(x-gap,y,0);
+					glVertex3f(x+gap,y,0); glVertex3f(x+r,y,0);
+					glVertex3f(x,y-r,0);   glVertex3f(x,y-gap,0);
+					glVertex3f(x,y+gap,0); glVertex3f(x,y+r,0);
+				glEnd();
+				glColor4f(1,1,1,1);
+				glLineWidth(1);
+
+				glMatrixMode(GL_PROJECTION);
+				glPopMatrix();
+				glMatrixMode(GL_MODELVIEW);
+				glPopMatrix();
+				glDepthMask(1);
+				glEnable(GL_DEPTH_TEST);
+				glEnable(GL_CULL_FACE);
+				glEnable(GL_TEXTURE_2D);
+				glEnable(GL_ALPHA_TEST);
+
+			}
+
+		}
 
 	return 1;
 }

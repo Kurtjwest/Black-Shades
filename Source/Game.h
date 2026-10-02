@@ -267,6 +267,20 @@ class Game
 		void StartNewGame(bool revengemode);
 		void UnZoom();          /* leave the sniper scope, undoing its aim correction */
 
+		/* Light-gun aiming (config "Pointer aiming", and the Wii's default):
+		   the pointer moves the gun inside the view, and pushes the view
+		   round only once it nears the edge of the screen. */
+		bool PointerPosition(float *x, float *y);  /* -1..1 from the middle, false if it is off the screen */
+		void PointerPan();      /* the edge push, before the camera is smoothed */
+		void PointerAim();      /* where the gun points, after it is smoothed */
+		float PointerPitchLimit();   /* how far the view may pitch and still be caught up with */
+		void CameraRecoil(float degrees);   /* a shot's kick, borrowed rather than kept */
+		void PointerRecoilSettle();
+#ifdef __wii__
+		void CheckSkeletons();  /* a joint that has left its body */
+		void CheckModels();     /* a model that changed after loading */  /* catch a joint gone non-finite, log it, put it back */  /* and handed back, a frame at a time */
+#endif
+
 		/* The main menu's buttons - 1 New Game / Resume Game, 2 Quit / End
 		   Game, 3 Revenge Game - as the bottom edge of each 70-unit-high
 		   button in the menu's 640x480 space (y up), or -1 when it is not

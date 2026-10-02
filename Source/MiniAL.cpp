@@ -278,9 +278,17 @@ void SDLCALL AudioCallback(void * /*userdata*/, Uint8 *stream, int len)
 /* Device setup                                                        */
 /* ------------------------------------------------------------------ */
 
+extern int soundtoggle;   /* config.txt's Sound */
+
 void Audio_Init(void)
 {
     if (g_device) return;
+
+    if (!soundtoggle) {
+        fprintf(stderr, "MiniAL: sound is off in config.txt - no audio device\n");
+        PlatformLogf("audio: off in config.txt, no device opened\n");
+        return;
+    }
 
     if (!SDL_WasInit(SDL_INIT_AUDIO) && SDL_InitSubSystem(SDL_INIT_AUDIO) < 0) {
         fprintf(stderr, "MiniAL: could not init SDL audio: %s\n", SDL_GetError());
@@ -608,6 +616,12 @@ void alListenerf(ALenum param, ALfloat value)
 void alListener3f(ALenum param, ALfloat v1, ALfloat v2, ALfloat v3)
 {
     const ALfloat v[3] = { v1, v2, v3 };
+
+    /* AL_ORIENTATION is six values - at and up - so three of them are not an
+       orientation, and reading the other three would be reading off the end
+       of v.  Real OpenAL rejects it here too. */
+    if (param == AL_ORIENTATION) return;
+
     alListenerfv(param, v);
 }
 

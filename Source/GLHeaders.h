@@ -92,4 +92,12 @@ int  BS_LightingEnabled(void);
 
 #endif
 
+/* Platforms whose GL will not give us display lists: WebGL has none, and the
+   Wii's opengx has a draw-sync bug that makes calling one hang (see the
+   comment in Text.cpp).  The font is the only thing in the game that used
+   them. */
+#if defined(__EMSCRIPTEN__) || defined(__wii__)
+  #define BS_NO_DISPLAY_LISTS 1
+#endif
+
 #endif /* BS_GLHEADERS_H */

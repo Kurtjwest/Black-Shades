@@ -15,6 +15,8 @@ extern unsigned int gSourceID[100];
 extern unsigned int gSampleSet[100];
 
 extern Camera camera;
+extern int pointeraim;
+extern int soundtoggle;
 
 extern Skeleton testskeleton;
 
@@ -785,6 +787,10 @@ void Game::LoadingScreen(float percent)
 
 	float size=1;
 
+	/* On a Wii this is the only progress report there is: the log's last
+	   line says how far loading got before it stopped. */
+	PlatformLogf("loading %3.0f%% - drawing\n",percent);
+
 	/* like the menu: the window may have changed size (or gone fullscreen)
 	   since the GL context was created */
 	PlatformSetViewport();
@@ -961,6 +967,9 @@ void Game::LoadingScreen(float percent)
 #else
 	PlatformSwapBuffers();
 #endif
+
+
+	PlatformLogf("        ... drawn\n");
 
 }
 
@@ -1627,7 +1636,11 @@ void Game::InitGame()
 #ifdef OS9 
 	qd.randSeed = TickCount();
 #else
+	PlatformLogf("seeding the random number generator\n");
+
 	srand(time(NULL));
+
+	PlatformLogf("camera and crowd setup\n");
 #endif
 
 	gamespeed=1;
@@ -1654,13 +1667,20 @@ void Game::InitGame()
 
 	//Setup path to walk around blocks
 
+	PlatformLogf("path.solid: loading\n");
+
 	path.load((unsigned char *)":Data:Models:path.solid");
+
+	PlatformLogf("path.solid: loaded, %d vertices %d triangles - rotating\n",
+	             path.vertexNum,path.TriangleNum);
 
 	path.Rotate(90,0,0);
 
 	path.Scale(.8,.8,.8);
 
 	path.CalculateNormals();
+
+	PlatformLogf("path.solid: done\n");
 
 	
 
@@ -3548,7 +3568,15 @@ void Game::InitGame()
 
 static const char facebuttonslabel[]="Controller face buttons (-1 = work it out, 0 = as SDL reports them, 1 = swap A/B and X/Y):";
 
-static const char assassinslabel[]="Assassins (1 = original; each mission's own number, times this):";
+static const char widescreenlabel[]="Widescreen on a Wii (-1 = ask the console, 0 = 4:3, 1 = 16:9):";
+
+static const char overscanlabel[]="Overscan (percent of each edge your television hides, 0-15; 0 for a monitor):";
+
+static const char soundlabel[]="Sound (1 = on; 0 opens no audio device at all):";
+
+static const char pointeraimlabel[]="Pointer aiming (1 = the pointer moves the gun and the view follows it; the Wii's own way):";
+
+static const char assassinslabel[]="Assassins (1 = original; the share of the crowd that is one, times this):";
 
 static const char viewdistancelabel[]="View distance (1 = original, no upper limit; the fog, the crowd and the assassins follow):";
 
@@ -3596,6 +3624,14 @@ void Game::WriteConfig(const char *path)
 	opstream << assassinmultiplier;
 	opstream << "\n" << facebuttonslabel << "\n";
 	opstream << swapfacebuttons;
+	opstream << "\n" << pointeraimlabel << "\n";
+	opstream << pointeraim;
+	opstream << "\n" << soundlabel << "\n";
+	opstream << soundtoggle;
+	opstream << "\n" << widescreenlabel << "\n";
+	opstream << g_widescreen;
+	opstream << "\n" << overscanlabel << "\n";
+	opstream << g_overscan;
 	opstream << "\n";
 	opstream.close();
 	PlatformCommitSave();
@@ -3625,7 +3661,7 @@ int Game::InitGL(void)
 
 		blood = 1;
 
-		blurness = 1;   //on by default, as in Black Shades Enhanced
+		blurness = 0;   //off: it smears the whole screen while you turn
 
 		mainmenuness=1;
 
@@ -3641,15 +3677,29 @@ int Game::InitGL(void)
 
 		fpslimit=300;   //Black Shades Enhanced: was a fixed 90
 
-		fov=100;        //Black Shades Enhanced: was a fixed 90
+		fov=90;         //the original's; Black Shades Enhanced opened it to 100
 
 		viewscale=1;    //view, fog and crowd distance, 1 = the original
 
 		populationdensity=1;   //people per block, 1 = the original
 
-		assassinmultiplier=1;  //each mission's own number of assassins, times this
+		assassinmultiplier=1;  //the share of the crowd that is an assassin, times this
 
 		swapfacebuttons=-1;    //work out whether this pad reports positions or labels
+
+		/* A pointer aims on the Wii, where the Wiimote is one; everywhere
+		   else the mouse turns the view, as it always has. */
+#ifdef __wii__
+		pointeraim=1;
+#else
+		pointeraim=0;
+#endif
+
+		soundtoggle=1;         //an audio device, unless config.txt says otherwise
+
+		g_widescreen=-1;       //ask the console what shape its television is
+
+		g_overscan=0;          //a monitor hides nothing; a television wants 4 or 5
 
 		mousegrab=true;
 
@@ -3810,6 +3860,38 @@ int Game::InitGL(void)
 
 		    }
 
+		    ipstream.ignore(256,'\n');
+
+		    std::getline(ipstream,label);
+
+		    if(ipstream >> tempint)pointeraim=tempint; else complete=false;
+
+		    if(label!=pointeraimlabel)complete=false;
+
+		    ipstream.ignore(256,'\n');
+
+		    std::getline(ipstream,label);
+
+		    if(ipstream >> tempint)soundtoggle=tempint; else complete=false;
+
+		    if(label!=soundlabel)complete=false;
+
+		    ipstream.ignore(256,'\n');
+
+		    std::getline(ipstream,label);
+
+		    if(ipstream >> tempint)g_widescreen=tempint; else complete=false;
+
+		    if(label!=widescreenlabel)complete=false;
+
+		    ipstream.ignore(256,'\n');
+
+		    std::getline(ipstream,label);
+
+		    if(ipstream >> tempint)g_overscan=tempint; else complete=false;
+
+		    if(label!=overscanlabel)complete=false;
+
 		    ipstream.close();
 
 		    if(!complete)WriteConfig(configpath);
@@ -3838,15 +3920,28 @@ int Game::InitGL(void)
 
 		if(!(assassinmultiplier>=0))assassinmultiplier=1;
 
+		if(soundtoggle!=0)soundtoggle=1;
+
+		if(g_widescreen<0)g_widescreen=-1;
+
+		if(g_widescreen>1)g_widescreen=1;
+
+		if(g_overscan<0)g_overscan=0;
+
+		if(g_overscan>15)g_overscan=15;   //past that there is more border than picture
+
+		if(pointeraim!=0)pointeraim=1;
+
 		if(swapfacebuttons<0)swapfacebuttons=-1;
 
 		if(swapfacebuttons>1)swapfacebuttons=1;
 
 		/* what the game is actually going to run with, which is worth seeing
 		   on a machine you cannot easily poke at (the Switch, over nxlink) */
-		fprintf(stderr,"Settings: view distance %g, density %g, assassins %g, face buttons %s\n",
+		fprintf(stderr,"Settings: view distance %g, density %g, assassins %g, face buttons %s, aiming %s, sound %s, overscan %d%%\n",
 		        viewscale,populationdensity,assassinmultiplier,
-		        swapfacebuttons<0?"worked out":(swapfacebuttons?"swapped":"as SDL reports them"));
+		        swapfacebuttons<0?"worked out":(swapfacebuttons?"swapped":"as SDL reports them"),
+		        pointeraim?"by pointer":"by the view",soundtoggle?"on":"off",g_overscan);
 
 		/* Room for the biggest crowd a mission can need: clear skies, where
 		   people are seen furthest (the spawner in GameTick.cpp works out each
@@ -3877,17 +3972,94 @@ int Game::InitGL(void)
 			if(people>budget)people=budget;
 #endif
 
+#ifdef __wii__
+			/* A Wii has 24 MB of MEM1 and 64 MB of MEM2 for everything, and a
+			   person is about 125 KB, so the crowd is the memory budget.  12
+			   MB is about 95 people - deliberately modest until one of these
+			   has actually run on a console, since the sounds and the
+			   textures want their share and a 729 MHz Broadway will not
+			   animate a crowd much bigger anyway.  blackshades.log says what
+			   was free. */
+			const int budget=(int)(12*1024*1024/sizeof(Person));
+
+			if(people>budget)people=budget;
+#endif
+
 			return people>2?people:2;
 
 		};
 
 		maxpeople=crowdsize();
 
-		while(!(person=new(std::nothrow) Person[maxpeople]())&&maxpeople>90){   //() zeroes them, as the old fixed array was
+#ifdef __wii__
+		/* MEM1 is 24 MB and most of it is spoken for, so the crowd comes out
+		   of MEM2 instead - taken once from the arena and never given back,
+		   which is all this needs.  Placement new one at a time rather than
+		   new[], which would want a cookie in front of the block. */
+		/* Always ask once, whatever the crowd came out at.  This used to be
+		   a while(maxpeople>90), on the idea that ninety people was small
+		   enough to stop thinning at - but the loop is also what does the
+		   allocating, so a setting that asked for ninety or fewer never
+		   allocated at all and left the game running on a null person[].
+		   A View distance of 0.5 with a Population density of 0.1 is
+		   enough to do it, and the frame-rate advice in README-wii.md
+		   points straight at that corner. */
+		for(;;){
+
+			person=(Person *)PlatformBigAlloc(sizeof(Person)*(size_t)maxpeople);
+
+			if(person||maxpeople<=2)break;
+
+			/* thin the crowd and ask again.  crowdsize() floors at two, so
+			   take whichever is smaller and make sure it really is smaller
+			   than last time, or this spins. */
+			populationdensity/=2;
+
+			const int smaller=crowdsize();
+
+			maxpeople=smaller<maxpeople?smaller:maxpeople/2;
+
+			if(maxpeople<2)maxpeople=2;
+
+		}
+
+		if(person)for(int i=0;i<maxpeople;i++)new(&person[i]) Person();
+
+		PlatformLogf("crowd: %d people of %u bytes each - %s\n",
+		             maxpeople,(unsigned)sizeof(Person),
+		             person?"got it":"NOTHING, the game will not run");
+#else
+		/* the same shape as the Wii's above: keep thinning rather than
+		   giving up at ninety and running on a null person[] */
+		for(;;){
+
+			person=new(std::nothrow) Person[maxpeople]();   //() zeroes them, as the old fixed array was
+
+			if(person||maxpeople<=2)break;
 
 			populationdensity/=2;
 
-			maxpeople=crowdsize();
+			const int smaller=crowdsize();
+
+			maxpeople=smaller<maxpeople?smaller:maxpeople/2;
+
+			if(maxpeople<2)maxpeople=2;
+
+		}
+#endif
+
+		/* Two people is a hundred and fifty kilobytes or so; if even that
+		   cannot be had there is no game to run, and saying so beats
+		   walking off the end of a null pointer a moment later. */
+		if(!person){
+
+			PlatformLogf("crowd: could not allocate even two people - stopping\n");
+
+			fprintf(stderr,"Black Shades: out of memory allocating the crowd\n");
+
+			PlatformShutdown();
+
+			exit(1);
 
 		}
 
@@ -4090,6 +4262,10 @@ int Game::InitGL(void)
 	/* vblsync in config.txt still means what it always did */
 	SDL_GL_SetSwapInterval(vblsync ? 1 : 0);
 
+	/* The video interface leaves a black bar down each side of a television
+	   by default; widen its window now that SDL has configured it. */
+	PlatformWiiFillScreen();
+
 	PlatformUpdateViewportSize(&screenwidth, &screenheight);
 
 	/* The game draws its own pointer on the menu screen. */
@@ -4187,7 +4363,10 @@ GLvoid Game::ReSizeGLScene(float fov, float near)
 
 	double frustumheight=tan(fov*(3.14159265358979/360.0))*near;
 
-	double frustumwidth=frustumheight*((double)screenwidth/(double)screenheight);
+	/* the shape of the screen, which on a widescreen Wii is not the shape of
+	   the framebuffer the picture is drawn into */
+	double frustumwidth=frustumheight*
+	                    PlatformDisplayAspect((float)screenwidth/(float)screenheight);
 
 	glFrustum(-frustumwidth,frustumwidth,-frustumheight,frustumheight,near,viewdistance);
 

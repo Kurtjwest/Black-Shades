@@ -15,6 +15,7 @@ extern unsigned int gSourceID[100];
 extern unsigned int gSampleSet[100];
 
 extern Camera camera;
+extern int pointeraim;
 
 extern float rad2deg;
 
@@ -574,6 +575,44 @@ static void PadUpdate(Game *g)
 		return;
 	}
 
+#ifdef __wii__
+	/* Wiimote and nunchuk, one in each hand.  The pointer does the aiming -
+	   SDL hands the IR over as the mouse, and the B trigger as its left
+	   button, so firing needs nothing here - and the stick drives.  Buttons
+	   are SDL's own letters rather than positions, because the Wii's mapping
+	   is fixed and known: A and B are the Wiimote's, X is the nunchuk's Z
+	   and Y its C. */
+	PadSetKey(forwardskey,  movey < -.35f);
+	PadSetKey(backwardskey, movey >  .35f);
+	PadSetKey(MAC_SHIFT_KEY, movey * movey > .72f);   /* all the way is a run */
+
+	/* the stick turns rather than strafes: tank controls, which is what a
+	   shooter wants when the pointer is doing the aiming */
+	PlatformPadMouse((int)(movex * fabs(movex) * 14), 0);
+
+	/* Laid out the way a shooter on this console is: the trigger fires, the
+	   nunchuk's trigger crouches, its thumb button raises and lowers the gun,
+	   and the Wiimote's thumb button reloads.  The gun is a toggle - a press
+	   to bring it up, another to put it down - not a hold. */
+
+	PadSetKey(MAC_CONTROL_KEY, PadButton(SDL_CONTROLLER_BUTTON_X));          /* Z: crouch, and the scope */
+	PadSetKey(aimkey,          PadButton(SDL_CONTROLLER_BUTTON_Y));          /* C: gun up or down, a press each way */
+	PadSetKey(MAC_R_KEY,       PadButton(SDL_CONTROLLER_BUTTON_A));          /* A: reload */
+	PadSetKey(psychicaimkey,   PadButton(SDL_CONTROLLER_BUTTON_DPAD_UP));    /* hold: the slow motion */
+	PadSetKey(MAC_SPACE_KEY,   PadButton(SDL_CONTROLLER_BUTTON_DPAD_DOWN));  /* dive */
+	PadSetKey(psychickey,      PadButton(SDL_CONTROLLER_BUTTON_DPAD_RIGHT)); /* soul release */
+
+	{
+		static bool oldwiilaser = false, oldwiiquit = false;
+		const bool wiilaser = PadButton(SDL_CONTROLLER_BUTTON_DPAD_LEFT);
+		const bool wiiquit  = PadButton(SDL_CONTROLLER_BUTTON_BACK);   /* HOME */
+		if (wiilaser && !oldwiilaser) g->HandleKeyDown('l');
+		if (wiiquit  && !oldwiiquit)  g->RequestQuit();   /* saves on the way out */
+		oldwiilaser = wiilaser; oldwiiquit = wiiquit;
+	}
+	return;
+#endif
+
 	PadSetKey(forwardskey,  movey < -.35f);
 	PadSetKey(backwardskey, movey >  .35f);
 	PadSetKey(leftkey,      movex < -.35f);
@@ -732,7 +771,10 @@ void Game::UpdateMouseGrab()
 	bool focused = g_window &&
 		(SDL_GetWindowFlags(g_window) & SDL_WINDOW_INPUT_FOCUS) != 0;
 
-	PlatformSetRelativeMouse(!mainmenu && mousegrab && focused);
+	/* Aiming with a pointer, the pointer's position is the aim, so it has to
+	   stay where the player put it - taking it captive would leave nothing to
+	   aim with.  (On a Wii there is no relative mode to take anyway.) */
+	PlatformSetRelativeMouse(!pointeraim && !mainmenu && mousegrab && focused);
 }
 
 #endif

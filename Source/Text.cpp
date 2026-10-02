@@ -7,12 +7,22 @@ void Text::LoadFontTexture(char *fileName)
 	FontTexture = loadTexture(fileName);
 }
 
-#ifdef __EMSCRIPTEN__
+#ifdef BS_NO_DISPLAY_LISTS
 
-/* WebGL has no display lists.  Each of the 256 lists below is one quad off
-   the font texture followed by a step to the right, so on the web the quad is
-   drawn where the list would have been called instead - same geometry, same
-   order, nothing recorded. */
+/* Neither the web nor the Wii gets display lists.
+
+   WebGL has none at all.  The Wii's opengx does, but it cannot be used here:
+   it has no glListBase, and - the reason this matters - drawing a list can
+   spin forever.  opengx resets its draw-sync token to 0 on every buffer swap
+   (ogx_prepare_swap_buffers) while call_lists.c keeps a separate
+   s_last_draw_sync_token that the swap does not reset, so the
+   "while (GX_GetDrawSync() < s_last_draw_sync_token);" in setup_draw_geometry
+   waits for a token that has already been counted back past it.  The loading
+   screen prints text every frame, so the game hung on the second one.
+
+   Each of the 256 lists below is one quad off the font texture followed by a
+   step to the right, so the quad is drawn where the list would have been
+   called instead - same geometry, same order, nothing recorded. */
 static void DrawFontChar(int which)
 {
 	const float cx = float(which % 16) / 16.0f;
@@ -86,7 +96,7 @@ void Text::glPrint(GLint x, GLint y, char *string, int set, float size, float wi
 	glLoadIdentity();
 	glScalef(size,size,1);									// Reset The Modelview Matrix
 	glTranslated(x,y,0);								// Position The Text (0,0 - Bottom Left)
-#ifdef __EMSCRIPTEN__
+#ifdef BS_NO_DISPLAY_LISTS
 	/* what glCallLists would have done: GL_BYTE means the characters are
 	   signed, and a list outside the 256 that were built draws nothing */
 	for (const char *c = string; *c; c++)

@@ -1,10 +1,68 @@
 #include <unistd.h>
+#include <string.h>
 
 #include "Models.h"
 #include "Quaternions.h"
 #include "Serialize.h"
 
-/* these all read big-endian data */
+/* ----------------------------------------------------------------------
+   These all read big-endian data, one, two or four bytes at a time, and the
+   models are read entirely through them - 364,000 reads to load the game.
+   Each one used to be a read() straight at the filesystem: on a desktop that
+   is a syscall and merely slow, but on a Wii it is a trip through libfat to
+   the SD card and it is the whole of the loading time.
+
+   So the file is pulled in 64 KB at a time and the small reads are served
+   from that.  One file is read at a time, start to finish, which is all this
+   has to cope with; a seek or a close drops the buffer (see Support.h).
+   ---------------------------------------------------------------------- */
+
+static int           buf_fd = -1;
+static unsigned char buf_data[64 * 1024];
+static size_t        buf_len = 0;
+static size_t        buf_pos = 0;
+
+void SerializeDropBuffer(int fd)
+{
+	(void)fd;
+	buf_fd = -1;
+	buf_len = buf_pos = 0;
+}
+
+static size_t BufferedRead(int fd, void *out, size_t want)
+{
+	unsigned char *p = (unsigned char *)out;
+	size_t got = 0;
+
+	if (fd != buf_fd) {          /* a different file: start again */
+		buf_fd = fd;
+		buf_len = buf_pos = 0;
+	}
+
+	while (got < want) {
+		if (buf_pos == buf_len) {
+			const ssize_t n = read(fd, buf_data, sizeof(buf_data));
+
+			if (n <= 0) break;   /* end of the file, or a broken one */
+
+			buf_len = (size_t)n;
+			buf_pos = 0;
+		}
+
+		size_t take = buf_len - buf_pos;
+
+		if (take > want - got) take = want - got;
+
+		memcpy(p + got, buf_data + buf_pos, take);
+
+		buf_pos += take;
+		got     += take;
+	}
+
+	return got;
+}
+
+#define read(fd, buf, n) BufferedRead((fd), (buf), (size_t)(n))
 
 int ReadBool(int fd, int count, bool *b)
 {

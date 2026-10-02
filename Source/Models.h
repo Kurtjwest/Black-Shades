@@ -35,6 +35,7 @@ class Model{
 				
 				XYZ boundingspherecenter;
 				float boundingsphereradius;
+				bool DrawableNow(const char *where);   /* counts still inside the arrays? */
 				int LineCheck(XYZ p1,XYZ p2, XYZ *p);
 				int LineCheck2(XYZ p1,XYZ p2, XYZ *p,XYZ move,float rotate);
 				int LineCheck2(XYZ *p1,XYZ *p2, XYZ *p,XYZ *move,float *rotate);

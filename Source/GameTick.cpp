@@ -18,6 +18,11 @@ extern unsigned int gSampleSet[100];
 
 extern Camera camera;
 
+extern int pointeraim;
+extern float aimrotation;
+extern float aimrotation2;
+extern float rad2deg;
+
 extern float camerashake;
 
 extern Fog fog;
@@ -254,6 +259,668 @@ void Game::UnZoom()
 	zoom=0;
 	camera.rotation2+=14;
 	camera.rotation+=9;
+}
+
+/* ----------------------------------------------------------------------
+   Light-gun aiming.
+
+   The pointer says where on the screen the gun is meant to be pointed.  A
+   perspective projection makes that an angle: a point at x across the
+   viewport is tan(x * tan(hfov/2)) away from the middle, so the offsets
+   below put the gun exactly under the crosshair rather than approximately.
+
+   Inside a dead zone in the middle of the screen the camera does not move at
+   all, which is what makes it feel like a light gun instead of a mouse; past
+   it the view is pushed round, faster the further out the pointer is, so you
+   can follow someone off the edge of the screen without the stick.
+
+   The camera keeps its own angles throughout.  All this writes is
+   aimrotation/aimrotation2, which Tick() hands to the body, and the body
+   poses the arms, which is what the gun model and the bullet are taken from.
+   ---------------------------------------------------------------------- */
+
+/* how far out the pointer travels before it starts pushing the view, as a
+   fraction of half the screen, and how fast it pushes at the very edge */
+static const float pointer_deadzone = .55;
+static const float pointer_pan      = 150;   /* per multiplier, so 250 degrees a second */
+
+/* where the pointer is, as -1..1 from the middle of the screen */
+/* Where the pointer was the last time anyone could see it.  A Wiimote stops
+   reporting as soon as it nears the edge of what the sensor bar can see -
+   which is exactly when you are pushing the view round - so the aim is held
+   there rather than thrown back to the middle of the screen. */
+static float pointer_lastx = 0, pointer_lasty = 0;
+
+/* and how long it has been gone, in seconds of game time */
+static float pointer_lost = 0;
+
+/* A blink at the edge should not stop you turning, but a Wiimote put down on
+   the sofa should not leave the view spinning either. */
+static const float pointer_grace = 1;
+
+/* ----------------------------------------------------------------------
+   Making the crosshair tell the truth.
+
+   Nothing in this game shoots along the body's forward axis.  The shot
+   direction is the vector between two joints of the posed skeleton - the
+   two hands for a rifle, the gun hand and the head for a pistol - and
+   that vector sits several degrees off whichever way the body is pointed,
+   by a different amount for every gun.  Pointing the *body* at the
+   crosshair therefore leaves the *barrel* beside it: measured on the
+   desktop build, 6.2-6.7 degrees for the assault rifle, which is a clean
+   miss at any range worth shooting at.
+
+   The original never had to care, because its crosshair was the middle of
+   the screen and the offset only made the gun sit a little off centre.  A
+   crosshair the player has put on somebody is a promise.
+
+   So the offset is measured out of the pose every frame, using the same
+   expressions the firing code uses, and handed back to the body as extra
+   angle.  The bullet, the gun model and the laser sight are all read off
+   that one pose, so all three land on the crosshair together.
+   ---------------------------------------------------------------------- */
+
+/* how far the barrel sits from the angles the body was given, in degrees */
+static float gunoffset_yaw = 0, gunoffset_pitch = 0;
+
+/* and the most any pose is allowed to ask for, so that a gun this does not
+   know about, or a pose caught mid-animation, cannot throw the body round */
+static const float gunoffset_max = 25;
+
+/* the line the crosshair is drawn on, out of the camera */
+static XYZ pointer_dir;
+
+/* Where the gun points, in the body's own frame - before playerrotation is
+   applied, which is exactly how the firing code builds it, per-gun fudge
+   angles and all.  false for anything that does not fire in a line. */
+static bool GunBarrel(Person &p, XYZ *out)
+{
+	XYZ v;
+
+	if(p.skeleton.free)return false;
+
+	if(p.whichgun==assaultrifle||p.whichgun==sniperrifle||p.whichgun==shotgun){
+
+		v=p.skeleton.joints[p.skeleton.jointlabels[lefthand]].position
+		 -p.skeleton.joints[p.skeleton.jointlabels[righthand]].position;
+
+		if(p.whichgun==assaultrifle)v=DoRotation(v,0,-2.5,0);
+		if(p.whichgun==sniperrifle )v=DoRotation(v,0, 4  ,0);
+
+		/* the shotgun throws its pellets 2 to 4 degrees up and a degree
+		   either side; the middle of that spread is where the crosshair
+		   belongs */
+		if(p.whichgun==shotgun     )v=DoRotation(v,3, 0  ,0);
+
+	}
+
+	else if(p.whichgun==handgun1||p.whichgun==handgun2){
+
+		v=p.skeleton.joints[p.skeleton.jointlabels[righthand]].position
+		 -(p.skeleton.joints[p.skeleton.jointlabels[head]].position*(thirdperson?.35:.65)
+		  +p.skeleton.joints[p.skeleton.jointlabels[neck]].position*(thirdperson?.65:.35));
+
+		v=DoRotation(v,0,-.9,0);
+
+	}
+
+	else return false;
+
+	if(v.x==0&&v.y==0&&v.z==0)return false;
+
+	Normalise(&v);
+
+	*out=v;
+
+	return true;
+}
+
+/* Measure that offset off the pose the last frame left behind.  Only off a
+   pose that is actually holding the gun up: one halfway down, or a
+   ragdoll, or a body too hurt to aim, says nothing about where a shot
+   would go, so the last honest measurement is kept instead. */
+static void GunOffset(Person &p)
+{
+	XYZ v;
+
+	if(p.aimamount<.99)return;
+	if(p.health<100)return;
+	if(!GunBarrel(p,&v))return;
+
+	static const double degrees=180.0/3.14159265358979;
+
+	/* Yaw: playerrotation is applied to this vector at the moment of
+	   firing, so the vector's own angle inside the body frame *is* how
+	   far the shot lands from wherever the body was pointed. */
+	float offyaw=atan2(v.x,v.z)*degrees;
+
+	/* Pitch: a yaw does not touch y, so the barrel's pitch is asin(y) -
+	   negative, because a positive rotation2 looks down - and the offset
+	   is how far that is from the pitch the body was given. */
+	float offpitch=p.playerrotation2+asin(v.y)*degrees;
+
+	if(offyaw  > gunoffset_max)offyaw  = gunoffset_max;
+	if(offyaw  <-gunoffset_max)offyaw  =-gunoffset_max;
+	if(offpitch> gunoffset_max)offpitch= gunoffset_max;
+	if(offpitch<-gunoffset_max)offpitch=-gunoffset_max;
+
+	/* eased in rather than snapped, so that picking up a different gun, or
+	   coming out of an animation, swings the body over instead of
+	   teleporting it.  A frame or two, no more. */
+	float rate=multiplier*30;
+
+	if(rate>1)rate=1;
+
+	gunoffset_yaw  +=(offyaw  -gunoffset_yaw  )*rate;
+	gunoffset_pitch+=(offpitch-gunoffset_pitch)*rate;
+}
+
+/* Pointing the gun the right way still leaves the shot beside the
+   crosshair, because the two start in different places: the crosshair is
+   drawn on a line out of the camera and the bullet leaves the hand, a foot
+   or so down and to the left of it.  Parallel lines never meet, so that is
+   half a unit of miss at every range - a head's width - which is exactly
+   the sort of lie a crosshair should not tell.
+
+   So the shot's starting point is slid sideways onto the camera's line,
+   keeping the distance down it that it already had.  The shot then runs
+   along the crosshair's own line, and the muzzle it appears to leave has
+   moved by less than the length of the gun.  The direction is left alone,
+   so a shotgun still throws its pellets apart.
+
+   Only for you, only while a pointer is doing the aiming, and not in third
+   person, where the camera is nowhere near the gun. */
+static void PointerShotStart(XYZ *start)
+{
+	if(thirdperson)return;
+
+	/* never aimed yet, so there is no line to put it on */
+	if(pointer_dir.x==0&&pointer_dir.y==0&&pointer_dir.z==0)return;
+
+	XYZ off=*start-camera.position;
+
+	*start=camera.position+pointer_dir*(off.x*pointer_dir.x+off.y*pointer_dir.y+off.z*pointer_dir.z);
+}
+
+/* ----------------------------------------------------------------------
+   Recoil, and the ceiling.
+
+   Two things about a shot's kick only go wrong once a pointer is doing the
+   aiming, and they compound.
+
+   The original pushed camera.rotation2 up a few degrees a shot and left it
+   there, because you pulled the mouse back down - that is what a mouse is
+   for.  A pointer has no such gesture: it says where you are pointing, not
+   which way to move, so nothing ever pulls the view back and the kick just
+   ratchets.  Measured with the pointer sitting still in the middle of the
+   screen, well inside the dead zone: two bursts of an assault rifle walked
+   the view from level to 59 degrees up and left it there.
+
+   And the ratchet runs into a ceiling.  The crosshair at the top of the
+   screen asks the body for fov/2 of pitch on top of whatever the view has,
+   the body stops at 89, and past that the gun stays at its limit while the
+   crosshair carries on - measured at 45 degrees apart, stuck, with the body
+   bent to vertical and the gun out of frame entirely.
+
+   So: the kick is borrowed rather than kept, and the view stops short of
+   the ceiling by exactly what the crosshair is worth.  The total reach is
+   unchanged - it is just split between the view and the pointer now.
+   ---------------------------------------------------------------------- */
+
+/* degrees of kick the view still owes back, and how fast it pays: a
+   proportion of what is left every second, so a burst settles in about half
+   a second once it stops */
+static float recoilborrowed = 0;
+static const float recoilreturn = 8;
+
+float Game::PointerPitchLimit()
+{
+	/* The frustum is tan(fov/2) high, so the pixel at the very top is
+	   atan(tan(fov/2)) - exactly fov/2 - off the middle.  That is what the
+	   crosshair can ask for, so that is what the view has to leave spare. */
+	float limit=89-fov/2;
+
+	if(limit<0)limit=0;
+
+	return limit;
+}
+
+void Game::CameraRecoil(float degrees)
+{
+	const float before=camera.rotation2;
+
+	camera.rotation2-=degrees;
+
+	if(!pointeraim)return;   /* a mouse pulls its own recoil back down */
+
+	/* The gun is aimed off the *shown* view, so a kick to the camera alone
+	   does nothing at all until it has eaten the 15 degrees of slack
+	   between the two and then drags everything at once.  Kick both, and
+	   the view jolts by what the shot was worth. */
+	camera.visrotation2-=degrees;
+
+	const float limit=zoom?89:PointerPitchLimit();
+
+	if(camera.rotation2   <-limit)camera.rotation2   =-limit;
+	if(camera.rotation2   > limit)camera.rotation2   = limit;
+	if(camera.visrotation2<-limit)camera.visrotation2=-limit;
+	if(camera.visrotation2> limit)camera.visrotation2= limit;
+
+	/* only what the view actually gave is owed back */
+	recoilborrowed+=before-camera.rotation2;
+}
+
+void Game::PointerRecoilSettle()
+{
+	if(recoilborrowed<=0){recoilborrowed=0; return;}
+
+	float back=recoilborrowed*recoilreturn*multiplier*.6f;   /* multiplier counts in .6s */
+
+	if(back>recoilborrowed)back=recoilborrowed;
+
+	camera.rotation2   +=back;
+	camera.visrotation2+=back;
+
+	recoilborrowed-=back;
+}
+
+
+/* ----------------------------------------------------------------------
+   How much of a hit a joint takes, by how close it is to where the bullet
+   landed.  Every site that pushes a body around shares this shape: weigh
+   each joint by 200 over its squared distance from the hit, add the
+   weights up, and give each joint its share of the total.
+
+   The share is what keeps it bounded - the weights sum to one however
+   large any of them is - but only while they are finite.  Divided by a
+   raw squared distance, a joint sitting exactly on the hit point weighs
+   infinity, the total weighs infinity, and every joint's share comes out
+   inf/inf, which is NaN.  One NaN is the whole skeleton: a person drawn
+   from joints that are all NaN sprays across the screen in their own
+   colours, and because people are recycled rather than reloaded between
+   missions it goes with them.
+
+   A hundredth of a unit squared is a tenth of a unit apart, far below any
+   separation a real skeleton has, so the floor never changes a hit that
+   was already well formed.  The `!(d>floor)` form catches a NaN distance
+   too.
+   ---------------------------------------------------------------------- */
+static float HitWeight(XYZ joint, XYZ hit)
+{
+	float d=findDistancefast(joint,hit);
+
+	if(!(d>.01f))d=.01f;
+
+	return 200/d;
+}
+
+
+#ifdef __wii__
+/* Wii only.  These are the two read-only sweeps that the people-
+   exploding-into-triangles fault turns out to depend on: it stays away
+   while they are compiled in and comes back when they are not, tested
+   both ways on hardware (see item 3 of README-wii.md).  That is a
+   property of that console's build and nothing else, so no other
+   platform carries the cost of them. */
+/* ----------------------------------------------------------------------
+   DO NOT DELETE THIS FUNCTION OR CheckModels() WITHOUT TESTING ON HARDWARE.
+
+   Both of them only read.  Neither has ever logged a line.  And yet on a
+   Wii the people-exploding-into-triangles fault stays away while they are
+   compiled in and comes straight back when they are taken out - tested in
+   both directions on a console.  Two read-only functions cannot fix
+   anything, so what they are actually doing is moving the binary's layout
+   and timing, and the real fault is a stray write that lands somewhere
+   harmless while they are here.
+
+   That is a bad reason to keep code and an honest one.  See item 3 of
+   README-wii.md for everything that has been ruled out and where to look
+   next.  Until somebody finds the write, this stays.
+   ----------------------------------------------------------------------
+
+   The net under the skeletons.
+
+   A person is drawn as one small model per joint, so a single joint in the
+   wrong place stretches triangles from wherever it is to wherever the rest
+   of the body is - which is what a screenful of someone's shirt colour
+   actually is.  And because people are recycled between missions rather
+   than reloaded, a body in that state travels into the next mission.
+
+   The first version of this only caught positions past ten million, which
+   was useless: geometry does not need astronomical coordinates to cover the
+   screen, only wrong ones.  Measured over a couple of minutes of play, a
+   joint never sits further than 5.95 units from the middle of its own body,
+   ragdoll or not.  Forty is seven times that - far too loose to fire on
+   anything real, far too tight to let a visible explosion through.
+
+   The middle is taken as the median of the joints on each axis rather than
+   the mean, because one joint that has gone wandering drags a mean with it
+   and would make the whole body look broken.
+
+   Anything caught goes in the log, with enough to say what that person was
+   doing, and is then pulled back onto the body so the session survives.  It
+   is a net, not a fix: a line in the log means a bug upstream of it.
+   ---------------------------------------------------------------------- */
+
+/* how far a joint may sit from the middle of its own body */
+static const float joint_reach = 40;
+
+static float MedianOf(float *v, int n)
+{
+	/* n is a skeleton's worth, twenty or so: an insertion sort is the right
+	   tool and leaves nothing allocated */
+	for(int i=1;i<n;i++){
+		const float key=v[i];
+		int k=i-1;
+		while(k>=0&&v[k]>key){v[k+1]=v[k];k--;}
+		v[k+1]=key;
+	}
+	return v[n/2];
+}
+
+/* The models themselves, which nothing in the game should ever write to
+   after loading.  If one changes, everything drawn from it is wrong from
+   that moment on and stays wrong for the life of the process - across a new
+   mission and across the menu, which is exactly the shape of the fault this
+   is looking for.  One model every eighth frame keeps it free. */
+void Game::CheckModels()
+{
+	extern Model skeletonmodels[10];
+
+	struct Watch { const char *name; Model *m; };
+
+	Watch watch[]={
+		{"head",&skeletonmodels[0]},{"chest",&skeletonmodels[1]},{"abdomen",&skeletonmodels[2]},
+		{"upperarm",&skeletonmodels[3]},{"lowerarm",&skeletonmodels[4]},{"hand",&skeletonmodels[5]},
+		{"upperleg",&skeletonmodels[6]},{"lowerleg",&skeletonmodels[7]},{"foot",&skeletonmodels[8]},
+		{"shades",&skeletonmodels[9]},
+		{"block0",&blocks[0]},{"block1",&blocks[1]},{"block2",&blocks[2]},{"block3",&blocks[3]},
+		{"street",&street},{"sidewalk",&sidewalkcollide},{"blocksimple",&blocksimple},
+	};
+
+	const int nwatch=(int)(sizeof(watch)/sizeof(watch[0]));
+
+	static unsigned long baseline[32];
+	static bool ready=false;
+	static int which=0;
+	static int frame=0;
+	static int said=0;
+
+	if(++frame%8)return;
+
+	for(int pass=0;pass<(ready?1:nwatch);pass++){
+
+		if(which>=nwatch)which=0;
+
+		Model *m=watch[which].m;
+
+		/* the counts and the geometry they describe; vArray is built from
+		   these, so there is no need to walk it too */
+		unsigned long h=2166136261u;
+
+		h^=(unsigned long)(unsigned short)m->vertexNum;   h*=16777619u;
+		h^=(unsigned long)(unsigned short)m->TriangleNum; h*=16777619u;
+
+		int nv=m->vertexNum, nt=m->TriangleNum;
+
+		if(nv<0||nv>max_model_vertex)nv=0;
+		if(nt<0||nt>max_textured_triangle)nt=0;
+
+		for(int i=0;i<nv;i++){
+			const unsigned char *b=(const unsigned char *)&m->vertex[i];
+			for(unsigned k=0;k<sizeof(XYZ);k++){h^=b[k]; h*=16777619u;}
+		}
+		for(int i=0;i<nt;i++){
+			const unsigned char *b=(const unsigned char *)&m->Triangles[i];
+			for(unsigned k=0;k<sizeof(TexturedTriangle);k++){h^=b[k]; h*=16777619u;}
+		}
+
+		if(!ready)baseline[which]=h;
+		else if(h!=baseline[which]){
+
+			baseline[which]=h;   /* only complain once per change */
+
+			if(said<8){
+
+				said++;
+
+				char note[220];
+
+				snprintf(note,sizeof(note),
+				         "model: %s changed after loading - now %d vertices,"
+				         " %d triangles (limits %d/%d)\n",
+				         watch[which].name,(int)m->vertexNum,(int)m->TriangleNum,
+				         max_model_vertex,max_textured_triangle);
+
+				PlatformLogf("%s",note);
+
+				fputs(note,stderr);
+
+				fflush(stderr);
+
+			}
+
+		}
+
+		which++;
+
+	}
+
+	ready=true;
+}
+
+void Game::CheckSkeletons()
+{
+	static int sweep=0;
+	static int said=0;
+
+	if(numpeople<1||!person)return;
+
+	/* sixteen people a frame: the whole crowd two or three times a second on
+	   a Wii, and far too little work to notice anywhere else */
+	for(int n=0;n<16&&n<numpeople;n++){
+
+		if(sweep>=numpeople)sweep=0;
+
+		const int who=sweep++;
+
+		Person &p=person[who];
+
+		int joints=p.skeleton.num_joints;
+
+		if(joints<1||joints>max_joints)continue;
+
+		/* the middle of the body, robust to a joint that has left it */
+		float xs[max_joints],ys[max_joints],zs[max_joints];
+
+		int good=0;
+
+		for(int j=0;j<joints;j++){
+
+			const XYZ &q=p.skeleton.joints[j].position;
+
+			if(!(fabs(q.x)<1e7)||!(fabs(q.y)<1e7)||!(fabs(q.z)<1e7))continue;   /* also drops a NaN */
+
+			xs[good]=q.x; ys[good]=q.y; zs[good]=q.z; good++;
+
+		}
+
+		XYZ middle;
+
+		middle=0;
+
+		if(good>0){
+
+			middle.x=MedianOf(xs,good);
+			middle.y=MedianOf(ys,good);
+			middle.z=MedianOf(zs,good);
+
+		}
+		else if(p.skeleton.free){
+
+			/* every joint is gone: the body itself is the only reference left */
+			middle=p.playercoords;
+
+			if(!(fabs(middle.x)<1e7)||!(fabs(middle.y)<1e7)||!(fabs(middle.z)<1e7))middle=person[0].playercoords;
+
+		}
+
+		for(int j=0;j<joints;j++){
+
+			Joint &J=p.skeleton.joints[j];
+
+			/* written as !(x < limit) so that a NaN fails every one of them */
+			const bool badpos=!(fabs(J.position.x)<1e7)||!(fabs(J.position.y)<1e7)||!(fabs(J.position.z)<1e7);
+			const bool badvel=!(fabs(J.velocity.x)<1e7)||!(fabs(J.velocity.y)<1e7)||!(fabs(J.velocity.z)<1e7);
+			const bool toofar=!badpos&&!(findDistance(J.position,middle)<joint_reach);
+
+			if(!badpos&&!badvel&&!toofar)continue;
+
+			if(said<12){
+
+				said++;
+
+				char note[420];
+
+				snprintf(note,sizeof(note),
+				         "skeleton: person %d joint %d %s - pos %g %g %g, middle %g %g %g,"
+				         " %g out, vel %g %g %g, ragdoll %d, health %g, type %d, gun %d,"
+				         " anim %d, crowd %d\n",
+				         who,j,badpos?"went non-finite":(badvel?"has a wild velocity":"left its body"),
+				         (double)J.position.x,(double)J.position.y,(double)J.position.z,
+				         (double)middle.x,(double)middle.y,(double)middle.z,
+				         (double)(badpos?-1:findDistance(J.position,middle)),
+				         (double)J.velocity.x,(double)J.velocity.y,(double)J.velocity.z,
+				         (int)p.skeleton.free,(double)p.health,p.type,p.whichgun,
+				         p.currentanimation,numpeople);
+
+				/* blackshades.log is the only channel on a Wii, stderr the one
+				   everywhere else, so say it in both */
+				PlatformLogf("%s",note);
+
+				fputs(note,stderr);
+
+				fflush(stderr);
+
+			}
+
+			if(badvel)J.velocity=0;
+
+			if(badpos||toofar)J.position=middle;
+
+		}
+
+	}
+
+}
+
+#endif   /* __wii__ - the two sweeps above */
+
+bool Game::PointerPosition(float *outx, float *outy)
+{
+	bool seen = false;
+
+	if(screenwidth>0&&screenheight>0&&PlatformPointerValid()){
+
+		Point p;
+
+		GetMouse(&p);
+
+		float x = (float)p.h/(screenwidth /2.0f)-1;
+		float y = (float)p.v/(screenheight/2.0f)-1;   /* positive downwards, as the pitch is */
+
+		/* Nudged past the edge, it is still pointing at the edge - clamped,
+		   not thrown away.  Wildly out is a reading to ignore. */
+		if(x>=-2&&x<=2&&y>=-2&&y<=2){
+
+			pointer_lastx = x<-1 ? -1 : (x>1 ? 1 : x);
+			pointer_lasty = y<-1 ? -1 : (y>1 ? 1 : y);
+
+			seen = true;
+
+		}
+
+	}
+
+	*outx = pointer_lastx;
+	*outy = pointer_lasty;
+
+	return seen;   /* the position is always the last real one, seen or not */
+}
+
+void Game::PointerPan()
+{
+	float px,py;
+
+	const bool seen = PointerPosition(&px,&py);
+
+	if(seen) pointer_lost = 0;
+	else     pointer_lost += multiplier*.6f;   /* multiplier counts in 0.6s */
+
+	/* Lost for a moment - which happens every time the pointer reaches the
+	   edge - the view carries on turning where it was going.  Lost for
+	   longer than that and it stops, rather than spinning by itself. */
+	if(!seen&&pointer_lost>pointer_grace)return;
+
+	/* scoped, the crosshair is the scope's own and the pointer steers */
+	const float deadzone = zoom ? 0 : pointer_deadzone;
+
+	const float overx = fabs(px)>deadzone ? (fabs(px)-deadzone)/(1-deadzone) : 0;
+	const float overy = fabs(py)>deadzone ? (fabs(py)-deadzone)/(1-deadzone) : 0;
+
+	/* squared, so a pointer just past the dead zone drifts and one at the
+	   edge swings - the same shape the stick's look speed uses */
+	if(overx>0)camera.rotation +=(px>0?1:-1)*overx*overx*pointer_pan*multiplier;
+	if(overy>0)camera.rotation2+=(py>0?1:-1)*overy*overy*pointer_pan*multiplier;
+}
+
+void Game::PointerAim()
+{
+	float px,py;
+
+	/* Seen or not, this is where the pointer last was: an aim that jumped
+	   back to the middle every time the Wiimote blinked would be unusable. */
+	PointerPosition(&px,&py);
+
+	/* Scoped, the rifle is the crosshair; anywhere else the pointer is. */
+	if(zoom){
+
+		aimrotation =camera.visrotation;
+		aimrotation2=camera.visrotation2;
+
+		return;
+
+	}
+
+	const float halfheight=tan(fov*(3.14159265358979/360.0));
+	const float halfwidth =halfheight*((double)screenwidth/(double)screenheight);
+
+	/* off the view the player is actually shown, so the gun lines up with the
+	   crosshair even while the view is lagging behind the camera */
+	static const double degrees=180.0/3.14159265358979;   /* not the game's rad2deg, which is 56.55 */
+
+	/* where the crosshair is */
+	const float wantrotation =camera.visrotation +atan(px*halfwidth )*degrees;
+	const float wantrotation2=camera.visrotation2+atan(py*halfheight)*degrees;
+
+	/* and the body pointed that much further over, so that the gun rather
+	   than the chest ends up on it */
+	GunOffset(person[0]);
+
+	aimrotation =wantrotation +gunoffset_yaw;
+	aimrotation2=wantrotation2+gunoffset_pitch;
+
+	/* and the crosshair's own line through the world, which the shot and
+	   the laser sight are both put onto */
+	pointer_dir=0;
+	pointer_dir.z=-1;
+	pointer_dir=DoRotation(pointer_dir,-wantrotation2,0,0);
+	pointer_dir=DoRotation(pointer_dir,0,-wantrotation,0);
+
+	if(aimrotation2> 89)aimrotation2= 89;
+	if(aimrotation2<-89)aimrotation2=-89;
+
+
 }
 
 void 	Game::Tick(){
@@ -718,6 +1385,7 @@ void 	Game::Tick(){
 			alSourcePlay(gSourceID[souloutsound]);
 
 			slomo=2;
+			fprintf(stderr,"SLOMO on, psychicpower %g\n",psychicpower);
 
 			flashamount=.5;
 
@@ -785,7 +1453,10 @@ void 	Game::Tick(){
 		GetMouse(&mouseloc);
 
 #else
-		GetMouseRel(&mouseloc);
+		/* Aiming with a pointer, the mouse's own motion is not a turn - the
+		   pointer's position is the aim, and PointerPan below does the
+		   turning.  What is left in here is the stick, which still turns. */
+		if(pointeraim)GetPadRel(&mouseloc); else GetMouseRel(&mouseloc);
 #endif
 
 		
@@ -815,6 +1486,12 @@ void 	Game::Tick(){
 
 		if(mouseloc.v-oldmouseloc.v<-200)camera.rotation2+=mouserotation2-oldmouserotation2+(300/1.3888*mousesensitivity);
 #else
+		/* Pointing at the screen does not turn the view by itself: the
+		   pointer moves the gun, and pushes the view only once it nears the
+		   edge.  A stick still turns, through the relative path below, so
+		   the two work together. */
+		if(pointeraim)PointerPan();
+
 		if(abs(mouseloc.h)<400)camera.rotation+=mouserotation;
 		if(abs(mouseloc.v)<200)camera.rotation2+=mouserotation2;
 		if(mouseloc.h>400)camera.rotation+=mouserotation-(500/1.3888*mousesensitivity);
@@ -826,6 +1503,9 @@ void 	Game::Tick(){
 #endif
 
 		
+
+		/* hand back a little of whatever the last shots borrowed */
+		if(pointeraim)PointerRecoilSettle();
 
 		if(camera.rotation2>89){camera.rotation2=89;}
 
@@ -849,6 +1529,22 @@ void 	Game::Tick(){
 
 		if(camera.visrotation2>camera.rotation2+15)camera.visrotation2=camera.rotation2+15;
 
+		/* The ceiling (see the recoil block above): with a pointer aiming,
+		   the view stops fov/2 short of where the body gives out, so that
+		   the crosshair at the edge of the screen is always an angle the gun
+		   can actually reach.  Scoped, the crosshair is the scope's own and
+		   the gun is the view, so the old limit stands. */
+		if(pointeraim&&!zoom){
+
+			const float pitchlimit=PointerPitchLimit();
+
+			if(camera.rotation2   > pitchlimit)camera.rotation2   = pitchlimit;
+			if(camera.rotation2   <-pitchlimit)camera.rotation2   =-pitchlimit;
+			if(camera.visrotation2> pitchlimit)camera.visrotation2= pitchlimit;
+			if(camera.visrotation2<-pitchlimit)camera.visrotation2=-pitchlimit;
+
+		}
+
 		
 
 		/* oldzoom too: the frame the scope comes down (say, to reload), the view
@@ -864,6 +1560,10 @@ void 	Game::Tick(){
 		oldzoom=zoom;
 
 		
+
+		/* the view is settled, so the gun can be pointed at the crosshair
+		   drawn over it */
+		if(pointeraim)PointerAim();
 
 		camera.oldoldrotation=camera.oldrotation;
 
@@ -915,7 +1615,10 @@ void 	Game::Tick(){
 
 		
 
-		person[0].playerrotation=180-camera.rotation;
+		/* the body follows the gun, not the eye, when they are not the same
+		   thing: the arms are posed off this, and the shot is taken off the
+		   arms */
+		person[0].playerrotation=180-(pointeraim?aimrotation:camera.rotation);
 
 		
 
@@ -1150,6 +1853,12 @@ void 	Game::Tick(){
 
 		//Spawn people
 
+#ifdef __wii__
+		CheckSkeletons();
+
+		CheckModels();
+#endif
+
 		spawndelay-=multiplier;
 
 		/* The crowd lives in the square of blocks out to peopleradius around
@@ -1174,11 +1883,30 @@ void 	Game::Tick(){
 
 		if(crowd<2)crowd=2;   //always room for you and the VIP
 
-		/* The assassins: the original had its 90 people over nine blocks at
-		   the mission's odds, 1 in evilprobability.  Now their number is that
-		   times the density, config.txt's Assassins multiplier and the View
-		   distance (from 1 up), spread over the blocks that are there. */
-		const float assassinchance=assassinmultiplier*(viewscale>1?viewscale:1)*9/float(crowdblocks>1?crowdblocks:1)/evilprobability;
+		/* The assassins.  The original rolled every person it put on the
+		   street at the mission's own odds, 1 in evilprobability, so that
+		   fraction of the crowd was an assassin - and because the crowd it
+		   rolled over was the couple of blocks around you, that fraction was
+		   also what you met.  What makes a street feel like the original's is
+		   that share, not the head count, so the share is what this keeps:
+		   the mission's odds, times config.txt's Assassins multiplier, and
+		   nothing at all to do with how far you can see.
+
+		   A longer View distance therefore holds proportionally more of them,
+		   because it holds proportionally more people - the street outside
+		   your window is the same street either way, and the extra ones are
+		   the ones the original would have had out there too if it had
+		   simulated that far.  It also means a platform that caps the crowd,
+		   like the Wii, still gets the right odds out of the people it can
+		   afford.
+
+		   This did the opposite for a while: a fixed dozen or so assassins
+		   spread over whatever square the weather and the View distance
+		   asked for, which measured as little as 1.1% of the crowd against
+		   the original's 16%. */
+		float assassinchance=assassinmultiplier/(float)evilprobability;
+
+		if(assassinchance>1)assassinchance=1;   //a multiplier past the odds: everyone
 
 		/* The original spawned (or recycled) someone every .1 of a second, at
 		   most one a frame.  A bigger crowd does it proportionally more often,
@@ -3426,6 +4154,7 @@ void 	Game::Tick(){
 
 					Normalise(&aim);
 
+
 					if(person[j].whichgun==sniperrifle){
 
 						start=person[j].playercoords+DoRotation(person[j].skeleton.joints[(person[j].skeleton.jointlabels[lefthand])].position,0,person[j].playerrotation,0);
@@ -3450,9 +4179,9 @@ void 	Game::Tick(){
 
 						if(j==0){
 
-							if(person[j].currentanimation!=crouchanim)camera.rotation2-=7;
+							if(person[j].currentanimation!=crouchanim)CameraRecoil(7);
 
-							if(person[j].currentanimation==crouchanim)camera.rotation2-=3;
+							if(person[j].currentanimation==crouchanim)CameraRecoil(3);
 
 						}
 
@@ -3484,9 +4213,9 @@ void 	Game::Tick(){
 
 						if(j==0){
 
-							if(person[j].currentanimation!=crouchanim)camera.rotation2-=7;
+							if(person[j].currentanimation!=crouchanim)CameraRecoil(7);
 
-							if(person[j].currentanimation==crouchanim)camera.rotation2-=3;
+							if(person[j].currentanimation==crouchanim)CameraRecoil(3);
 
 						}
 
@@ -3518,9 +4247,9 @@ void 	Game::Tick(){
 
 						if(j==0){
 
-							if(person[j].currentanimation!=crouchanim)camera.rotation2-=6;
+							if(person[j].currentanimation!=crouchanim)CameraRecoil(6);
 
-							if(person[j].currentanimation==crouchanim)camera.rotation2-=4;
+							if(person[j].currentanimation==crouchanim)CameraRecoil(4);
 
 						}
 
@@ -3550,9 +4279,9 @@ void 	Game::Tick(){
 
 						if(j==0){
 
-							if(person[j].currentanimation!=crouchanim)camera.rotation2-=5;
+							if(person[j].currentanimation!=crouchanim)CameraRecoil(5);
 
-							if(person[j].currentanimation==crouchanim)camera.rotation2-=3;
+							if(person[j].currentanimation==crouchanim)CameraRecoil(3);
 
 						}
 
@@ -3582,7 +4311,7 @@ void 	Game::Tick(){
 
 							if(person[j].currentanimation!=crouchanim){
 
-								camera.rotation2-=2.3;
+								CameraRecoil(2.3);
 
 								camera.rotation+=(float)(Random()%100)/50;
 
@@ -3590,7 +4319,7 @@ void 	Game::Tick(){
 
 							if(person[j].currentanimation==crouchanim){
 
-								camera.rotation2-=1.5;
+								CameraRecoil(1.5);
 
 								camera.rotation+=(float)(Random()%100)/60;
 
@@ -3599,6 +4328,8 @@ void 	Game::Tick(){
 						}
 
 					}
+
+					if(j==0&&pointeraim&&!zoom)PointerShotStart(&start);
 
 					end=start+aim*1000;
 
@@ -3943,7 +4674,7 @@ void 	Game::Tick(){
 
 									if(findDistancefast(person[whichhit].skeleton.joints[j].position,hitstruct.hitlocation)<200){
 
-										totalarea+=(200/findDistancefast(person[whichhit].skeleton.joints[j].position,hitstruct.hitlocation));
+										totalarea+=HitWeight(person[whichhit].skeleton.joints[j].position,hitstruct.hitlocation);
 
 									}
 
@@ -3953,7 +4684,7 @@ void 	Game::Tick(){
 
 									if(findDistancefast(person[whichhit].skeleton.joints[j].position,hitstruct.hitlocation)<200){
 
-										person[whichhit].skeleton.joints[j].velocity+=aim*((200/findDistancefast(person[whichhit].skeleton.joints[j].position,hitstruct.hitlocation))/totalarea*200);
+										person[whichhit].skeleton.joints[j].velocity+=aim*(HitWeight(person[whichhit].skeleton.joints[j].position,hitstruct.hitlocation)/totalarea*200);
 
 									}
 
@@ -3991,7 +4722,7 @@ void 	Game::Tick(){
 
 									if(findDistancefast(DoRotation(person[whichhit].skeleton.joints[j].position,0,person[whichhit].playerrotation,0)+person[whichhit].playercoords,hitstruct.hitlocation)<200){
 
-										totalarea+=(200/findDistancefast(DoRotation(person[whichhit].skeleton.joints[j].position,0,person[whichhit].playerrotation,0)+person[whichhit].playercoords,hitstruct.hitlocation));
+										totalarea+=HitWeight(DoRotation(person[whichhit].skeleton.joints[j].position,0,person[whichhit].playerrotation,0)+person[whichhit].playercoords,hitstruct.hitlocation);
 
 									}
 
@@ -4003,7 +4734,7 @@ void 	Game::Tick(){
 
 									if(findDistancefast(DoRotation(person[whichhit].skeleton.joints[j].position,0,person[whichhit].playerrotation,0)+person[whichhit].playercoords,hitstruct.hitlocation)<200){
 
-										person[whichhit].skeleton.joints[j].offset+=DoRotation(aim*((200/findDistancefast(DoRotation(person[whichhit].skeleton.joints[j].position,0,person[whichhit].playerrotation,0)+person[whichhit].playercoords,hitstruct.hitlocation))/totalarea*10),0,-person[whichhit].playerrotation,0);
+										person[whichhit].skeleton.joints[j].offset+=DoRotation(aim*(HitWeight(DoRotation(person[whichhit].skeleton.joints[j].position,0,person[whichhit].playerrotation,0)+person[whichhit].playercoords,hitstruct.hitlocation)/totalarea*10),0,-person[whichhit].playerrotation,0);
 
 									}
 
@@ -4397,6 +5128,10 @@ void 	Game::Tick(){
 
 					}
 
+					/* the laser lands where the bullet will, which is now on
+					   the crosshair rather than beside it */
+					if(j==0&&pointeraim&&!zoom)PointerShotStart(&start);
+
 					end=start+aim*1000;
 
 					//Blocks
@@ -4757,7 +5492,7 @@ void 	Game::Tick(){
 
 											if(findDistancefast(DoRotation(person[j].skeleton.joints[k].position,0,person[j].playerrotation,0)+person[j].playercoords,hitstruct.hitlocation)<200){
 
-												totalarea+=(200/findDistancefast(DoRotation(person[j].skeleton.joints[k].position,0,person[j].playerrotation,0)+person[j].playercoords,hitstruct.hitlocation));
+												totalarea+=HitWeight(DoRotation(person[j].skeleton.joints[k].position,0,person[j].playerrotation,0)+person[j].playercoords,hitstruct.hitlocation);
 
 											}
 
@@ -4769,7 +5504,7 @@ void 	Game::Tick(){
 
 											if(findDistancefast(DoRotation(person[j].skeleton.joints[k].position,0,person[j].playerrotation,0)+person[j].playercoords,hitstruct.hitlocation)<200){
 
-												person[j].skeleton.joints[k].offset+=DoRotation(sprites.velocity[i]*.1*((200/findDistancefast(DoRotation(person[j].skeleton.joints[k].position,0,person[j].playerrotation,0)+person[j].playercoords,hitstruct.hitlocation))/totalarea*10),0,-person[j].playerrotation,0);
+												person[j].skeleton.joints[k].offset+=DoRotation(sprites.velocity[i]*.1*(HitWeight(DoRotation(person[j].skeleton.joints[k].position,0,person[j].playerrotation,0)+person[j].playercoords,hitstruct.hitlocation)/totalarea*10),0,-person[j].playerrotation,0);
 
 											}
 

@@ -1,0 +1,168 @@
+# Makefile.wii - Nintendo Wii homebrew build (devkitPPC / libogc).
+#
+#   export DEVKITPRO=/opt/devkitpro
+#   make -f Makefile.wii          # or: make wii
+#
+# Produces boot.dol.  Copy it, meta.xml, icon.png and the game's Data folder
+# to /apps/blackshades/ on the SD card and start it from the Homebrew Channel.
+# config.txt and the high scores are written to that same folder.
+#
+# Nothing here is shared with the desktop Makefile: separate object directory
+# (build-wii), separate flags, separate output, so building one never
+# disturbs the other.
+#
+# Packages needed:  wii-dev wii-sdl2 wii-opengx gamecube-tools
+#   sudo dkp-pacman -S wii-dev wii-sdl2 wii-opengx gamecube-tools
+#
+# (gamecube-tools is the one that provides elf2dol, which turns the linked
+# .elf into the .dol the console loads.)
+#
+# See README-wii.md for the controls and for what is known to be untested.
+
+ifeq ($(strip $(DEVKITPRO)),)
+$(error Set DEVKITPRO first, e.g. export DEVKITPRO=/opt/devkitpro)
+endif
+
+DEVKITPPC ?= $(DEVKITPRO)/devkitPPC
+LIBOGC    := $(DEVKITPRO)/libogc
+PORTLIBS  := $(DEVKITPRO)/portlibs/wii $(DEVKITPRO)/portlibs/ppc
+TOOLS     := $(DEVKITPPC)/bin
+
+# elf2dol is not part of devkitPPC: it comes from the gamecube-tools package
+# and installs into $DEVKITPRO/tools/bin, which is not necessarily on PATH.
+ELF2DOL := $(firstword $(wildcard $(DEVKITPRO)/tools/bin/elf2dol) \
+                       $(shell command -v elf2dol 2>/dev/null))
+
+PREFIX := $(TOOLS)/powerpc-eabi-
+CC     := $(PREFIX)gcc
+CXX    := $(PREFIX)g++
+
+TARGET := boot
+OBJDIR := build-wii
+SRCDIR := Source
+
+# ---------------------------------------------------------------- flags
+
+MACHDEP := -DGEKKO -mrvl -mcpu=750 -meabi -mhard-float
+
+WARNINGS := -Wall -Wno-unused-variable -Wno-unused-but-set-variable \
+            -Wno-unused-value -Wno-sign-compare -Wno-write-strings \
+            -Wno-narrowing -Wno-parentheses
+
+# SDL2 provides main() on a Wii (src/main/wii/SDL_wii_main.c) and it does
+# setup nothing else will: the IOS reload, the power and reset callbacks, and
+# - the reason the pointer works at all - WPAD_SetDataFormat with IR and
+# WPAD_SetVRes(640,480), which is the resolution its mouse events are scaled
+# from.  So this is the one build that does NOT set SDL_MAIN_HANDLED: SDL
+# renames main() to SDL_main() and calls it once the console is up.
+DEFINES  := -D__WII__
+
+# The port's Wii code is behind __wii__, which is what SDL's own headers use.
+# devkitPPC's gcc defines it for -mrvl; older ones do not, so ask.
+ifeq ($(shell echo | $(CXX) $(MACHDEP) -dM -E - 2>/dev/null | grep -c "define __wii__"),0)
+  DEFINES += -D__wii__
+endif
+
+INCLUDES := -I$(SRCDIR) -I$(LIBOGC)/include \
+            $(foreach d,$(PORTLIBS),-I$(d)/include -I$(d)/include/SDL2)
+
+PKGCONFIG  := PKG_CONFIG_LIBDIR=$(DEVKITPRO)/portlibs/wii/lib/pkgconfig:$(DEVKITPRO)/portlibs/ppc/lib/pkgconfig pkg-config
+SDL_CFLAGS := $(shell $(PKGCONFIG) --cflags sdl2 2>/dev/null)
+SDL_LIBS   := $(shell $(PKGCONFIG) --libs sdl2 2>/dev/null)
+ifeq ($(strip $(SDL_LIBS)),)
+  SDL_LIBS := -lSDL2 -lopengx -lfat -lwiiuse -lbte -logc -lm
+endif
+
+# SDL2main is where that main() lives
+SDL_LIBS := -lSDL2main $(SDL_LIBS)
+
+BASEFLAGS := -O2 -g $(MACHDEP) $(DEFINES) $(INCLUDES) $(SDL_CFLAGS) -MMD -MP
+CXXFLAGS  := $(BASEFLAGS) $(WARNINGS) -include $(SRCDIR)/Support.h
+CFLAGS    := $(BASEFLAGS) -Wall -Wno-unused-value
+
+LDFLAGS := $(MACHDEP) -Wl,-Map,$(OBJDIR)/$(TARGET).map \
+           $(foreach d,$(PORTLIBS),-L$(d)/lib) -L$(LIBOGC)/lib/wii
+
+# opengx supplies the gl* entry points on top of GX, and has to come before
+# libogc; SDL2 needs wiiuse/bte for the Wiimote and fat for the SD card.
+LIBS := $(SDL_LIBS) -lopengx -lfat -lwiikeyboard -lwiiuse -lbte -logc -lm
+
+# ---------------------------------------------------------------- sources
+#
+# The same list the desktop Makefile builds (AGL_DSp.cpp, Alerts.cpp and
+# Files.cpp are the Mac OS 9 originals and are not built anywhere).
+
+CXXSRCS := \
+	Camera.cpp \
+	Decals.cpp \
+	Fog.cpp \
+	Frustum.cpp \
+	GameDraw.cpp \
+	GameInitDispose.cpp \
+	GameLoop.cpp \
+	GameTick.cpp \
+	Globals.cpp \
+	MacInput.cpp \
+	Main.cpp \
+	MiniAL.cpp \
+	Maths.cpp \
+	Models.cpp \
+	Person.cpp \
+	Quaternions.cpp \
+	Serialize.cpp \
+	Skeleton.cpp \
+	Sprites.cpp \
+	Support.cpp \
+	TGALoader.cpp \
+	Text.cpp \
+	Textures.cpp \
+	Timer.cpp
+
+CSRCS := \
+	thirdparty/stb_image_impl.c \
+	thirdparty/stb_vorbis.c
+
+OBJS := $(addprefix $(OBJDIR)/,$(CXXSRCS:.cpp=.o) $(CSRCS:.c=.o))
+
+# ---------------------------------------------------------------- rules
+
+.PHONY: all clean sdcard
+.DEFAULT_GOAL := all
+
+all: $(TARGET).dol
+
+$(TARGET).dol: $(OBJDIR)/$(TARGET).elf
+	@test -n "$(ELF2DOL)" || { echo "elf2dol not found: dkp-pacman -S gamecube-tools"; exit 1; }
+	@echo "  dol       $@"
+	@$(ELF2DOL) $< $@
+
+$(OBJDIR)/$(TARGET).elf: $(OBJS)
+	@echo "  link      $@"
+	@$(CXX) $(LDFLAGS) -o $@ $(OBJS) $(LIBS)
+
+$(OBJDIR)/%.o: $(SRCDIR)/%.cpp
+	@mkdir -p $(dir $@)
+	@echo "  c++       $<"
+	@$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(OBJDIR)/%.o: $(SRCDIR)/%.c
+	@mkdir -p $(dir $@)
+	@echo "  cc        $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+# everything the Homebrew Channel wants, in one folder to copy to the card
+sdcard: all
+	@mkdir -p sdcard/apps/blackshades
+	@cp $(TARGET).dol sdcard/apps/blackshades/boot.dol
+	@cp wii/meta.xml sdcard/apps/blackshades/meta.xml
+	@cp wii/icon.png sdcard/apps/blackshades/icon.png 2>/dev/null || true
+	@rm -rf sdcard/apps/blackshades/Data
+	@cp -R Data sdcard/apps/blackshades/Data
+	@echo "  ready     sdcard/apps/blackshades - copy the apps folder to the card"
+
+clean:
+	rm -rf $(OBJDIR) $(TARGET).dol sdcard
+
+-include $(OBJS:.o=.d)
+
+$(OBJS): Makefile.wii

@@ -39,8 +39,13 @@ typedef struct Point
 	int v;
 } Point;
 
-#define SetFPos(fildes, whence, offset) lseek(fildes, offset, whence)
-#define FSClose(fildes) close(fildes)
+/* The model reader buffers ahead (Serialize.cpp), so a seek or a close has to
+   throw that buffer away - otherwise the next file served the same
+   descriptor number would be read from the last one's leftovers. */
+void SerializeDropBuffer(int fd);
+
+#define SetFPos(fildes, whence, offset) (SerializeDropBuffer(fildes), lseek(fildes, offset, whence))
+#define FSClose(fildes) (SerializeDropBuffer(fildes), close(fildes))
 
 int Random();
 void Microseconds(UnsignedWide *microTickCount);
@@ -62,15 +67,42 @@ void PlatformPadPointerTo(int x, int y);     /* put it somewhere (touch) */
 bool PlatformLoadGL(void);             /* glad, once the GL context exists */
 #endif
 
-#if defined(__SWITCH__) || defined(__EMSCRIPTEN__)
-/* The Switch's SD card and the browser's IndexedDB both need telling that a
-   file has been written; everywhere else the filesystem has it already. */
+#if defined(__SWITCH__) || defined(__EMSCRIPTEN__) || defined(__wii__)
+/* The Switch's SD card, the Wii's, and the browser's IndexedDB all need
+   telling that a file has been written; everywhere else the filesystem has it
+   already. */
 void PlatformCommitSave(void);
 #else
 #define PlatformCommitSave() ((void)0)
 #endif
 void GetMouse(Point *p);
 void GetMouseRel(Point *p);
+void GetPadRel(Point *p);    /* the stick's share of it, for pointer aiming */
+bool PlatformPointerValid(void);   /* false when the pointer is off the screen */
+void *PlatformBigAlloc(size_t bytes);   /* the crowd: MEM2 on a Wii, malloc elsewhere */
+
+/* Television screens: how much of the edge is hidden, and what shape the
+   picture is actually shown in (a Wii set to 16:9 stretches the same
+   framebuffer across a wide screen).  Both live in Support.cpp. */
+extern int g_overscan;      /* percent of each edge the television hides */
+extern int g_widescreen;    /* -1 ask the console, 0 = 4:3, 1 = 16:9 */
+float PlatformDisplayAspect(float framebufferaspect);
+#ifdef __wii__
+void PlatformWiiFillScreen(void);   /* the video interface's own black bars */
+#else
+#define PlatformWiiFillScreen() ((void)0)
+#endif
+
+#ifdef __wii__
+/* A console has nowhere to print to, so the startup story goes to
+   sd:/apps/blackshades/blackshades.log, a line at a time so that a run which
+   stops half way still leaves one. */
+void PlatformLogf(const char *fmt, ...);
+void PlatformShutdown(void);   /* unmount the card, once nothing else needs it */
+#else
+#define PlatformLogf(...) ((void)0)
+#define PlatformShutdown() ((void)0)
+#endif
 void GetKeys(unsigned long *keys);
 int Button(void);
 

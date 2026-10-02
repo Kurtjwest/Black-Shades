@@ -14,7 +14,7 @@ want to change the icon.
 import os
 import struct
 
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -133,9 +133,35 @@ def write_switch_icon(img, path):
     flat.save(path, format="JPEG", quality=92, optimize=True, progressive=False)
 
 
+def write_wii_icon(img, path):
+    """The Homebrew Channel's icon: 128x48 PNG, drawn on its own banner.
+
+    The artwork is square, so it sits at the left of a wide strip filled with
+    the colour just inside its edge, with the game's name beside it."""
+    edge = img.convert("RGBA").getpixel((img.width // 2, 3))[:3]
+    strip = Image.new("RGB", (128, 48), edge)
+    art = img.convert("RGBA").resize((48, 48), Image.LANCZOS)
+    flat = Image.new("RGB", art.size, edge)
+    flat.paste(art, mask=art.split()[3])
+    strip.paste(flat, (2, 0))
+
+    draw = ImageDraw.Draw(strip)
+    text = "BLACK\nSHADES"
+    fill = (235, 235, 235) if sum(edge) < 330 else (20, 20, 20)
+    try:
+        font = ImageFont.truetype("DejaVuSans-Bold.ttf", 15)
+    except OSError:
+        font = ImageFont.load_default()
+    draw.multiline_text((56, 24), text, font=font, fill=fill, anchor="lm", spacing=1)
+
+    strip.save(path, format="PNG", optimize=True)
+
+
 if __name__ == "__main__":
     icon = render()
     icon.save(os.path.join(HERE, "BlackShades-1024.png"))
     write_icns(icon, os.path.join(ROOT, "macos", "BlackShades.icns"))
     write_switch_icon(icon, os.path.join(ROOT, "switch", "icon.jpg"))
-    print("wrote icon/BlackShades-1024.png, macos/BlackShades.icns and switch/icon.jpg")
+    write_wii_icon(icon, os.path.join(ROOT, "wii", "icon.png"))
+    print("wrote icon/BlackShades-1024.png, macos/BlackShades.icns, "
+          "switch/icon.jpg and wii/icon.png")

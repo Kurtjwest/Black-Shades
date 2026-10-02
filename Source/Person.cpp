@@ -8,6 +8,9 @@ extern Animation animation[30];
 extern int thirdperson;
 extern int visions;
 extern Camera camera;
+extern int pointeraim;      /* the gun is pointed by a pointer, not the view */
+extern float aimrotation;
+extern float aimrotation2;
 extern float rad2deg;
 extern Model gunmodels[11];
 extern Model skeletonmodels[10];
@@ -305,7 +308,7 @@ void 	Person::DoAnimations(int who){
 		XYZ facingright;
 		int oldanimation=currentanimation;
 		if(who==0){
-			playerrotation2=camera.rotation2;
+			playerrotation2=pointeraim?aimrotation2:camera.rotation2;
 			//Facing
 			facing=0;
 			facing.z=1;
@@ -628,7 +631,11 @@ void 	Person::DoStuff(int who){
 		if(playerrotation>playerlowrotation+70){playerrotation=playerlowrotation+70;}
 		if(playerrotation<playerlowrotation-70){playerrotation=playerlowrotation-70;}
 	}
-	if(who==0)camera.rotation=180-playerrotation;
+	/* Crouching clamps the torso to the legs just above, so whichever angle
+	   the body was following has to come back changed - the view when the
+	   view is the aim, the aim when a pointer is moving it. */
+	if(who==0&&!pointeraim)camera.rotation=180-playerrotation;
+	if(who==0&&pointeraim)aimrotation=180-playerrotation;
 	
 	if(who!=0&&visions==0){
 		if(targetanimation!=walkanim&&targetanimation!=zombiewalkanim)speed=1.0*speedmult;
@@ -947,7 +954,7 @@ int Person::DrawSkeleton(int who){
 		facing=0;
 		facing.z=1;
 		
-		facing=DoRotation(facing,camera.rotation2,0,0);
+		facing=DoRotation(facing,playerrotation2,0,0);   /* the aim pitch: camera.rotation2 unless a pointer is moving it */
 		facingdown=DoRotation(facing,90,0,0);
 		skeleton.specialforward[1]=skeleton.specialforward[1]*(1-aimamount)+facingdown*aimamount;
 		skeleton.specialforward[2]=skeleton.specialforward[2]*(1-aimamount)+facingdown*aimamount;

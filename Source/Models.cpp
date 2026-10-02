@@ -69,13 +69,20 @@ bool Model::load(Str255 Name)
 	Files file;
 
 	tfile=file.OpenFile(Name);
-	if (tfile == -1) return 0;
+	if (tfile == -1) {
+		PlatformLogf("   model %s: COULD NOT OPEN\n",(const char *)Name);
+		return 0;
+	}
 	SetFPos(tfile,fsFromStart,0);
 
 		// read model settings
 	
 	err=ReadShort(tfile,1,&vertexNum);
 	err=ReadShort(tfile,1,&TriangleNum);
+
+	PlatformLogf("   model %s: %d vertices, %d triangles (limits %d/%d)\n",
+	             (const char *)Name,vertexNum,TriangleNum,
+	             max_model_vertex,max_textured_triangle);
 
 	/* the counts come from the file and size fixed arrays: a damaged model
 	   must not be read past their ends */
@@ -189,8 +196,57 @@ void Model::CalculateNormals()
 }
 
 extern int nocolors;
+
+/* ----------------------------------------------------------------------
+   Whether this model is still safe to hand to GL.
+
+   Every draw below does glDrawArrays(GL_TRIANGLES, 0, TriangleNum*3), and
+   the array it reads holds max_textured_triangle triangles and no more.
+   TriangleNum is a short sitting in front of that array, so anything that
+   writes past the end of one model lands on the next one's counts - and a
+   count past four hundred makes the next draw walk straight off the end of
+   vArray and into whatever follows, drawn as triangles in that model's own
+   colours.  That is a spray of geometry that does not go away, because the
+   count stays broken for the life of the process.
+
+   So: check it before drawing, say so once, and draw nothing rather than
+   garbage.  A line in the log means something scribbled on a model and the
+   checksum sweep in GameTick.cpp will say which.
+   ---------------------------------------------------------------------- */
+bool Model::DrawableNow(const char *where)
+{
+	if(TriangleNum>=0&&TriangleNum<=max_textured_triangle&&
+	   vertexNum >=0&&vertexNum <=max_model_vertex)return true;
+
+	static int said=0;
+
+	if(said<8){
+
+		said++;
+
+		char note[200];
+
+		snprintf(note,sizeof(note),
+		         "model: refusing to draw from %s - TriangleNum %d, vertexNum %d"
+		         " (limits %d/%d)\n",
+		         where,(int)TriangleNum,(int)vertexNum,
+		         max_textured_triangle,max_model_vertex);
+
+		PlatformLogf("%s",note);
+
+		fputs(note,stderr);
+
+		fflush(stderr);
+
+	}
+
+	return false;
+}
+
 void Model::draw()
 {
+	if(!DrawableNow("draw()"))return;
+
 	if(!nocolors){
 #ifdef __EMSCRIPTEN__
 	/* A colour array is the one thing the web's GL emulation will not take
@@ -226,6 +282,8 @@ void Model::draw()
 
 void Model::draw(float r, float g, float b)
 {
+	if(!DrawableNow("draw(rgb)"))return;
+
 	if(!nocolors)glColor4f(r,g,b,1);
 	if(nocolors==1)glColor4f(0,0,0,1);
 	if(nocolors==2)glColor4f(1,0,0,1);
@@ -240,6 +298,8 @@ void Model::draw(float r, float g, float b)
 
 void Model::draw(float r, float g, float b, float o)
 {
+	if(!DrawableNow("draw(rgba)"))return;
+
 	if(!nocolors)glColor4f(r,g,b,o);
 	if(nocolors==1)glColor4f(0,0,0,1);
 	if(nocolors==2)glColor4f(1,0,0,1);
@@ -254,6 +314,8 @@ void Model::draw(float r, float g, float b, float o)
 
 void Model::draw(float r, float g, float b, float x, float y, float z)
 {
+	if(!DrawableNow("draw(rgbxyz)"))return;
+
 	if(!nocolors)glColor4f(r,g,b,1);
 	if(nocolors==1)glColor4f(0,0,0,1);
 	if(nocolors==2)glColor4f(1,0,0,1);

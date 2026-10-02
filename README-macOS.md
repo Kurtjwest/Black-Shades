@@ -75,13 +75,30 @@ and code-signed, so writing inside it is not an option:
 The game's read-only data is found next to the executable (inside the bundle
 that is `Contents/Resources/Data`). `BLACKSHADES_DATA=/some/dir` overrides it.
 
-`config.txt` gained eight lines at the end: `Antialiasing (0, 2, 4 or 8)`,
+`config.txt` gained twelve lines at the end: `Antialiasing (0, 2, 4 or 8)`,
 `Start fullscreen`, from Black Shades Enhanced `Fps (frames per second)
-limit` (default 300) and `FOV (Field of View)` (default 100), and `View
+limit` (default 300) and `FOV (Field of View)` (default 90), and `View
 distance` (default 1), `Population density` (default 1), `Assassins`
-(default 1) and `Controller face buttons` (default -1), all four below. A config file from before a line existed
+(default 1), `Controller face buttons` (default -1), `Pointer aiming`
+(default 0, and 1 on a Wii), `Sound` (default 1), `Widescreen on a Wii`
+(default -1, which asks the console) and `Overscan` (default 0; the percent
+of each edge a television hides, which everything is then drawn inside). A config file from before a line existed
 still loads - the missing ones take their defaults - and is rewritten with the
 new lines added.
+
+### Pointer aiming
+
+`Pointer aiming (1 = the pointer moves the gun and the view follows it; the
+Wii's own way)` swaps the mouse from turning the view to moving a crosshair.
+The gun points at the crosshair - exactly at it, since a perspective
+projection turns a screen position into an angle - the view holds still while
+the crosshair is in the middle 55% of the screen, and past that the view is
+pushed round, faster the nearer the edge. The mouse is not captured in this
+mode, because its position *is* the aim.
+
+It is off by default and nothing changes while it is off. It exists for the
+Wii, where the Wiimote is an absolute pointer, and it works with a mouse
+anywhere - which is how it was developed and tuned. See `README-wii.md`.
 
 ### View distance
 
@@ -140,16 +157,30 @@ original had right around you), 0.5 puts 5, and 0 leaves just you and the
 VIP. There is no upper limit but memory (see above), and anything below 0
 counts as 1.
 
-`Assassins (1 = original; each mission's own number, times this)` scales how
-many of the people are assassins. The original's odds differ from mission to
-mission - one spawn in 4, 5 or 6 - and 1 keeps each mission's own number; 2
-doubles it, 0.5 halves it and 0 means no assassins at all, up to the point
-where everyone who spawns is one. Custom levels' own odds are scaled the same
-way. Zombie missions are all zombies, whatever it says.
+`Assassins (1 = original; the share of the crowd that is one, times this)`
+scales what fraction of the people on the street are assassins. The original's
+odds differ from mission to mission - one person in 4, 5 or 6 - and 1 keeps
+each mission's own odds exactly; 2 doubles the share, 0.5 halves it, 0 means
+no assassins at all, and anything that would take the share past everyone is
+capped there. Custom levels' own odds are scaled the same way. Zombie missions
+are all zombies, whatever it says.
 
-The three settings multiply: the number of assassins is the original's times
-the Population density, times the Assassins multiplier, times the View
-distance (from 1 up), spread over the whole populated area.
+That share is deliberately *not* a function of View distance. What makes a
+street feel like the original's is how many of the people on it are out to
+kill you, so that is what is held fixed: seeing further puts proportionally
+more assassins in the world because it puts proportionally more people in it,
+and the crowd around you reads the same at any setting. Measured across view
+distances 0.5 to 4, the assassin share comes out 16.1-18.6% on the 1-in-6
+missions, against the original port's own 15.7%.
+
+Two consequences worth knowing. A long View distance means more assassins
+converging on the VIP from further out, so it is not quite difficulty-neutral
+even though it is density-neutral - at 4 it runs a little hotter than the
+original. And a platform that caps the crowd for memory, like the Wii, now
+gets the right odds out of however many people it can afford; before this it
+got the odds divided by the size of the square, which came to somewhere
+between an eighth and a fifteenth of them depending on the weather and the
+View distance.
 
 ## Controls
 
@@ -418,9 +449,13 @@ by the scope's correction every time (see the scope, below).
 
 **Settings.**
 
-* `FOV (Field of View)` in config.txt, default 100 (the original was a fixed
-  90). The sniper scope zooms to a quarter of it - 25 degrees at the default,
-  where the original zoomed to 10 - as in Black Shades Enhanced.
+* `FOV (Field of View)` in config.txt, default 90, which is what the original
+  used; Black Shades Enhanced opened it to 100 and that was the default here
+  until now. The sniper scope zooms to a quarter of it - 22.5 degrees at the
+  default, where the original zoomed to 10 - as in Black Shades Enhanced.
+* `Blur`, default 0. Black Shades Enhanced turned the motion blur on by
+  default; it smears the whole screen while you turn, so it is off here and
+  `Blur: 1` puts it back.
 * `Fps (frames per second) limit`, default 300 (was a fixed 90). The game
   counts frames in its own unit, 0.6 of a real frame, so 300 lets it run at up
   to 500 real frames a second; with `VBL sync` on, the display's refresh rate
@@ -493,8 +528,16 @@ Emscripten's fixed-function emulation, and saves to IndexedDB; see
 `README-wasm.md` for the two or three places the web needed something
 different.
 
-Both targets keep their own object directory and their own flags, so building
-either leaves the desktop build exactly where it was.
+A Wii homebrew target (devkitPPC/libogc, with SDL2 and opengx) lives in
+`Makefile.wii`, built with `make wii`, behind `#ifdef __wii__`. It plays as a
+Wii shooter does: the Wiimote points the gun at the screen and the nunchuk
+drives. That aiming is a runtime option rather than a Wii-only code path -
+`Pointer aiming` in config.txt turns it on with a mouse anywhere, and it
+defaults off everywhere but the Wii - so it can be played and tuned on a
+desktop. It has never run on a console; see `README-wii.md`.
+
+All three keep their own object directory and their own flags, so building any
+of them leaves the desktop build exactly where it was.
 
 ## Repository notes
 

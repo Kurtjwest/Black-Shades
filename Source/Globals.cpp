@@ -31,6 +31,20 @@ int thirdperson;
 int nocolors;
 int visions;
 Camera camera;
+
+/* Light-gun aiming, for the Wii's pointer and for a mouse that would rather
+   move a crosshair than the whole view.  The camera keeps looking where it
+   looks; these are where the gun is pointed within that view, and everything
+   downstream - the arms, the gun model, the bullet, the laser sight - follows
+   from the body angles they feed.  pointeraim off leaves all of it alone. */
+int pointeraim;
+float aimrotation;      /* yaw, in the same frame as camera.rotation */
+float aimrotation2;     /* pitch, likewise */
+
+/* config.txt's Sound: with it off no audio device is opened at all, which is
+   also how you find out whether the audio device is what is wrong. */
+int soundtoggle=1;
+
 float rad2deg;
 Skeleton testskeleton;
 
